@@ -48,7 +48,7 @@ class YoloEvaluator:
 if __name__ == "__main__":
     from carla_mock import MockCarlaEnv
     
-    env = MockCarlaEnv(r"C:\Users\濱田　紗空\.gemini\antigravity\brain\9a0dbc48-4cc3-47aa-8222-9d812da7d71b\base_dashcam_view_1778238817860.png")
+    env = MockCarlaEnv("base_image.png")
     evaluator = YoloEvaluator()
     
     print("Testing Evaluator...")
