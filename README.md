@@ -1,42 +1,44 @@
+# 
+
 # CARLA Edge Case Search Pipeline
 
-このプロジェクトは、自動運転AI（YOLOv8等）の認識精度が低下する「エッジケース（悪天候条件）」を、効率的な探索アルゴリズム（Optuna）を用いて自動的に発見するためのパイプラインです。
+ This project is a pipeline designed to automatically identify "edge cases" (adverse weather conditions) where the recognition accuracy of autonomous driving AI (such as YOLOv8) declines, using an efficient search algorithm (Optuna).
 
-現在は、CARLAシミュレータの代わりに画像処理ベースのモック環境 (`carla_mock.py`) で動作確認が可能です。
+ Currently, functionality can be verified using an image-processing-based mock environment ( `carla_mock.py` ) instead of the CARLA simulator.
 
-## プロジェクト構成
+## Project Structure
 
-- `optimizer.py`: メインの実行スクリプト。Optunaを用いて天候パラメータを最適化（認識率を最小化）します。
-- `carla_mock.py`: 指定された天候条件に基づいて、ベース画像 (`base_image.png`) に雨や霧のエフェクトをかけます。
-- `evaluator.py`: YOLOv8を用いて、画像内の物体検出数や信頼度を評価します。
-- `visualizer.py`: 探索結果の履歴を可視化（グラフ化）します。
-- `carla_real_template.py`: 本物のCARLAシミュレータに接続するためのコードテンプレートです。
+- `optimizer.py`: The main execution script. It uses Optuna to optimize weather parameters (minimize recognition rate).
+- `carla_mock.py`: Applies rain or fog effects to the base image ( `base_image.png` ) based on specified weather conditions.
+- `evaluator.py`: Uses YOLOv8 to evaluate the number of detected objects and their confidence scores in the image.
+- `visualizer.py`: Visualizes (plots) the history of search results.
+- `carla_real_template.py`: A code template for connecting to the actual CARLA simulator.
 
-## セットアップ
+## Setup
 
-### 1. 依存ライブラリのインストール
+### 1. Install dependency libraries
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 動作確認 (モック環境)
+### 2. Verify operation (mock environment)
 
-まずはモック環境でパイプラインを動かしてみます。
+ First, let’s run the pipeline in a mock environment.
 
 ```bash
 python optimizer.py
 ```
 
-実行後、`results/` ディレクトリに「最も認識が難しかった画像（エッジケース）」と「最も認識しやすかった画像」が保存されます。
+ After execution, the "most difficult image to recognize (edge case)" and the "easiest image to recognize" will be saved in `the results/` directory.
 
-## CARLAシミュレータとの統合方法
+## How to Integrate with the CARLA Simulator
 
-本物のCARLA環境で使用するには、以下の手順を行ってください。
+ To use this in a real CARLA environment, follow the steps below.
 
-1. **CARLA Simulatorのインストール**: [CARLA公式サイト](https://carla.org/)からシミュレータをダウンロードし、起動します。
-2. **接続クラスの実装**: `carla_real_template.py` を参考に、実際のカメラセンサーから画像を取得するクラスを作成します。
-3. **環境の差し替え**: `optimizer.py` 内で `MockCarlaEnv` をインポートしている箇所を、作成した新クラスに変更します。
+1. **Install the CARLA Simulator**: Download the simulator from [the official CARLA website](https://carla.org/) and launch it.
+2. **Implementing the connection class**: Refer to `carla_real_template.py` to create a class that retrieves images from the actual camera sensor.
+3. **Replacing the environment**: In ` `optimizer.py` `, replace the section where ` `MockCarlaEnv` ` is imported with the new class you created.
 
 ```python
 # optimizer.py
@@ -47,6 +49,6 @@ from my_carla_env import RealCarlaEnv
 env = RealCarlaEnv()
 ```
 
-## 貢献・共有について
+## Contributions and Sharing
 
-このリポジトリをGitHubにプッシュする際は、`base_image.png` を含めることで、他のユーザーがすぐに動作確認できるようになっています。CARLA本体はリポジトリに含めず、各自の環境でセットアップすることを前提としています。
+ When pushing this repository to GitHub, be sure to include ` `base_image.png` ` so that other users can immediately verify that it works. CARLA itself is not included in the repository; it is assumed that you will set it up in your own environment.
