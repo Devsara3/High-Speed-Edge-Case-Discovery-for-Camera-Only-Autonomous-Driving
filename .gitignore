@@ -1,0 +1,7 @@
+__pycache__/
+results/
+test_outputs/
+*.pt
+*.jpg
+*.png
+!base_image.png
