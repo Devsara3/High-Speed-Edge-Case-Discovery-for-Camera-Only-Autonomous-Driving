@@ -10,7 +10,6 @@ Currently, functionality can be verified using an image-processing-based mock en
 
 ```mermaid
 flowchart LR
-    %% Define styles
     classDef optuna fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
     classDef params fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
     classDef env fill:#d9ead3,stroke:#93c47d,stroke-width:2px,color:#000000;
@@ -19,30 +18,24 @@ flowchart LR
     classDef save fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
     classDef learning fill:#e6b8af,stroke:#cc0000,stroke-width:2px,color:#000000,stroke-dasharray: 5 5;
 
-    %% Nodes
     A["Optuna Optimizer<br/>(optimizer.py)<br/>- Sun Altitude<br/>- Precipitation<br/>- Fog Density"]:::optuna
     B["CARLA Environment<br/>Mock or Real<br/>(carla_mock.py)"]:::params
     C["YOLOv8 detect (ONNX)<br/>on sensor image"]:::env
     D["Precision Metrics<br/>Count Objects<br/>Total Confidence"]:::sensor
     E["Update optimum<br/>parameters"]:::yolo
     F["Save Edge Case Image<br/>(results/)"]:::save
-    
-    %% Learning Loop Nodes (Future Work)
     G["Dataset Augmentation<br/>(Add Edge Cases)"]:::learning
     H["Retrain / Fine-tune<br/>YOLOv8 Model"]:::learning
 
-    %% Flow
     A --> B
     B --> C
     C --> D
     D --> E
-    E -. "Optimization Loop" .-> A
-    E -. "If Worst Edge Case" .-> F
-    
-    %% Learning Flow
-    F ==>|Collect Data (Planned)| G
-    G ==>|Train (Planned)| H
-    H ==>|Update Weights (Planned)| C
+    E -.->|Optimization Loop| A
+    E -.->|If Worst Edge Case| F
+    F -->|Collect Data Planned| G
+    G -->|Train Planned| H
+    H -->|Update Weights Planned| C
 ```
 
 ## Project Structure
