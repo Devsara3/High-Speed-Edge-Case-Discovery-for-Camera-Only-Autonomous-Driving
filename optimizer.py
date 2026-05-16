@@ -61,6 +61,13 @@ def run_optimization(env, evaluator, n_trials=50, sampler_name='TPE'):
             best_score_so_far = score
             cv2.imwrite(f"results/edge_case_worst_{sampler_name}.jpg", annotated_img)
             
+            # [FUTURE WORK] Active Learning Loop Integration
+            # Here, we will save the raw 'img' and its 'pseudo-ground-truth' labels 
+            # (e.g. from the clear weather detection) to a dataset folder 
+            # so that YOLOv8 can be retrained on this edge case.
+            # 
+            # e.g., dataset_manager.add_to_dataset(img, labels)
+            
         # 逆に最もよく認識できた状態（スコアが最大）を記録
         if score > worst_score_so_far:
             worst_score_so_far = score
