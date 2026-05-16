@@ -5,8 +5,9 @@ import os
 import cv2
 from carla_mock import MockCarlaEnv
 from evaluator import YoloEvaluator
+from risk_calculator import RiskCalculator
 
-def run_optimization(env, evaluator, n_trials=50, sampler_name='TPE'):
+def run_optimization(env, evaluator, risk_calculator, n_trials=50, sampler_name='TPE'):
     """
     Optunaを用いてエッジケース（認識率が最も下がる天候パラメータ）を探索します。
     """
@@ -45,13 +46,21 @@ def run_optimization(env, evaluator, n_trials=50, sampler_name='TPE'):
         env.set_weather(sun_altitude_angle, precipitation, fog_density)
         img = env.get_image()
 
-        # 評価（検出数と信頼度の合計、および描画済み画像を取得）
-        count, conf, annotated_img = evaluator.evaluate(img, return_image=True)
+        # 評価（YOLO3Dによる主観的Z距離の取得）
+        min_z_distance, conf, annotated_img = evaluator.evaluate(img, return_image=True)
         
-        # 目的関数スコアの計算
-        # 検出数が少ないほど、エッジケース（危険な状態）とする。
-        # 検出数が同じ場合は信頼度が低い方をより危険とするためのペナルティ項を追加。
-        score = count + (conf / 100.0)
+        # モック環境からGround Truthを取得
+        gt = env.get_ground_truth()
+        
+        # 知覚リスクの計算
+        r_perceived, debug_info = risk_calculator.calculate_risk(
+            ego_pos=gt['ego_pos'], ego_vel=gt['ego_vel'],
+            target_pos=gt['target_pos'], target_vel=gt['target_vel'],
+            target_class=gt['target_class'],
+            yolo_z_distance=min_z_distance
+        )
+        
+        score = r_perceived
         
         # 画像の保存ロジック
         trial_img_path = f"results/trial_{trial.number}_{sampler_name}.jpg"
@@ -81,9 +90,11 @@ def run_optimization(env, evaluator, n_trials=50, sampler_name='TPE'):
             "sun_altitude_angle": sun_altitude_angle,
             "precipitation": precipitation,
             "fog_density": fog_density,
-            "detected_count": count,
-            "total_confidence": conf,
-            "score": score,
+            "min_z_distance": min_z_distance,
+            "r_perceived": r_perceived,
+            "omega": debug_info['omega'],
+            "alpha": debug_info['alpha'],
+            "beta": debug_info['beta'],
             "elapsed_time_sec": elapsed_time
         })
 
@@ -103,15 +114,16 @@ if __name__ == "__main__":
     base_image_path = "base_image.png"
     env = MockCarlaEnv(base_image_path)
     evaluator = YoloEvaluator()
+    risk_calc = RiskCalculator()
     
     os.makedirs("results", exist_ok=True)
 
     # 1. TPE (提案手法) による探索
-    study_tpe, df_tpe = run_optimization(env, evaluator, n_trials=50, sampler_name='TPE')
+    study_tpe, df_tpe = run_optimization(env, evaluator, risk_calc, n_trials=50, sampler_name='TPE')
     df_tpe.to_csv("results/history_tpe.csv", index=False)
     
     # 2. ランダム探索 (ベースライン) との比較
-    study_random, df_random = run_optimization(env, evaluator, n_trials=50, sampler_name='Random')
+    study_random, df_random = run_optimization(env, evaluator, risk_calc, n_trials=50, sampler_name='Random')
     df_random.to_csv("results/history_random.csv", index=False)
     
     print("\nOptimization completed. Results saved in 'results' directory.")

@@ -15,17 +15,19 @@ class YoloEvaluator:
 
     def evaluate(self, image, return_image=False):
         """
-        画像を推論し、「検出できたターゲット物体の数」と「その信頼度の合計」を返します。
+        画像を推論し、YOLO3Dモデルの出力をエミュレートします。
+        ターゲット物体の奥行き（Z成分）を主観的距離として返します。
+        
         :param image: BGR形式のnumpy配列画像
         :param return_image: Trueの場合、バウンディングボックス描画済みの画像を一緒に返す
-        :return: (検出数, 信頼度の合計) または (検出数, 信頼度の合計, 描画済み画像)
+        :return: (最小のZ距離, 信頼度の合計) または (最小のZ距離, 信頼度の合計, 描画済み画像)
+                 検出失敗時は Z距離は float('inf') となります。
         """
-        # YOLOv8による推論
-        # verbose=False で標準出力を抑制
         results = self.model(image, verbose=False)
         
         detected_count = 0
         total_confidence = 0.0
+        min_z_distance = float('inf') # YOLO3Dのエミュレート：最も近い物体のZ距離
 
         for r in results:
             boxes = r.boxes
@@ -33,17 +35,39 @@ class YoloEvaluator:
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
                 
-                # 自動運転に関連するクラス（車、人など）のみをカウント
+                # 自動運転に関連するクラスのみをカウント
                 if cls_id in self.target_classes:
                     detected_count += 1
                     total_confidence += conf
                     
+                    # --- YOLO3D 出力のエミュレート部分 ---
+                    # 実際のYOLO3Dモデルであれば、ここで box.z のような3D出力が直接取得できます。
+                    # 今回は標準のYOLOv8（2D）のため、バウンディングボックスの「ピクセル幅」から
+                    # Z成分（奥行き）を近似計算してエミュレートします。
+                    
+                    # box.xywh[0] は [x_center, y_center, width, height]
+                    w_pixel = float(box.xywh[0][2]) 
+                    
+                    # ピンホールカメラモデルによる簡易的なZ算出
+                    # Z = (focal_length * real_world_width) / w_pixel
+                    # 仮の定数: focal_length = 800, 車の幅 = 1.8m
+                    focal_length = 800.0
+                    real_width = 1.8
+                    
+                    # ピクセル幅が極端に小さい場合のエラー回避
+                    if w_pixel > 1.0:
+                        z_dist = (focal_length * real_width) / w_pixel
+                    else:
+                        z_dist = float('inf')
+                        
+                    if z_dist < min_z_distance:
+                        min_z_distance = z_dist
+
         if return_image:
-            # 最初の推論結果（バウンディングボックス等）が描画された画像を取得
             annotated_frame = results[0].plot()
-            return detected_count, total_confidence, annotated_frame
+            return min_z_distance, total_confidence, annotated_frame
             
-        return detected_count, total_confidence
+        return min_z_distance, total_confidence
 
 if __name__ == "__main__":
     from carla_mock import MockCarlaEnv
@@ -56,11 +80,11 @@ if __name__ == "__main__":
     # 晴天時
     env.set_weather(sun_altitude_angle=90.0, precipitation=0.0, fog_density=0.0)
     img_clear = env.get_image()
-    count_clear, conf_clear = evaluator.evaluate(img_clear)
-    print(f"Clear Weather -> Detected: {count_clear}, Total Conf: {conf_clear:.2f}")
+    z_clear, conf_clear = evaluator.evaluate(img_clear)
+    print(f"Clear Weather -> YOLO3D Z-Distance: {z_clear:.2f}m, Total Conf: {conf_clear:.2f}")
     
     # 悪天候時（暗闇＋霧）
     env.set_weather(sun_altitude_angle=0.0, fog_density=60.0)
     img_bad = env.get_image()
-    count_bad, conf_bad = evaluator.evaluate(img_bad)
-    print(f"Bad Weather   -> Detected: {count_bad}, Total Conf: {conf_bad:.2f}")
+    z_bad, conf_bad = evaluator.evaluate(img_bad)
+    print(f"Bad Weather   -> YOLO3D Z-Distance: {z_bad:.2f}m, Total Conf: {conf_bad:.2f}")

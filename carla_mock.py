@@ -65,6 +65,19 @@ class MockCarlaEnv:
 
         return np.clip(img, 0, 255).astype(np.uint8)
 
+    def get_ground_truth(self):
+        """
+        モック画像のシーンに対応する、固定の真値（Ground Truth）データを返します。
+        本番のCARLA環境では、ここでAPIから動的にegoやtargetの情報を取得します。
+        """
+        return {
+            'ego_pos': [0.0, 0.0, 0.0],       # 自車位置
+            'ego_vel': [13.8, 0.0, 0.0],      # 自車速度 (約50km/hで前進)
+            'target_pos': [15.0, 0.0, 0.0],   # 相手車両位置 (15m前方)
+            'target_vel': [0.0, 0.0, 0.0],    # 相手車両速度 (停止中)
+            'target_class': 'car'             # 相手車両のクラス
+        }
+
 if __name__ == "__main__":
     # テスト実行
     env = MockCarlaEnv("base_image.png")
