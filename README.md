@@ -1,86 +1,89 @@
 # CARLA Edge Case Search & Active Learning Pipeline
 
-This project is a pipeline designed to automatically identify "edge cases" (adverse weather conditions) where the recognition accuracy of autonomous driving AI (such as YOLOv8) declines, using an efficient search algorithm (Optuna). 
+This project is a pipeline designed to automatically identify **"edge cases" (adverse weather conditions)** where the recognition accuracy of autonomous driving AI declines. By using an efficient search algorithm (Optuna), it discovers critical scenarios where the AI mistakenly perceives a dangerous situation as safe.
 
-In the future, this pipeline will be extended into an **Active Learning Loop**, where the discovered edge cases are automatically used to retrain and improve the AI model, creating a self-improving autonomous driving perception system.
+Currently, functionality can be verified using an image-processing-based mock environment (`carla_mock.py`) with a **YOLO3D Emulator** built on top of YOLOv8. In the future, this pipeline will be extended into an **Active Learning Loop**, where the discovered edge cases are automatically used to retrain and improve the AI model.
 
-Currently, functionality can be verified using an image-processing-based mock environment (`carla_mock.py`) instead of the CARLA simulator.
+---
 
-## Pipeline Architecture
+## 🏗️ Pipeline Architecture
+
+The pipeline calculates the **Perceived Risk ($R_{perceived}$)** by comparing Ground Truth (GT) kinematics with the AI's subjective perception (YOLO3D Z-distance). Optuna **minimizes** this risk score to find the most dangerous edge cases (e.g., scenarios where GT is highly dangerous but the AI fails to detect it, resulting in a low perceived risk).
 
 ```mermaid
 flowchart LR
     classDef optuna fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
-    classDef params fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
     classDef env fill:#d9ead3,stroke:#93c47d,stroke-width:2px,color:#000000;
-    classDef sensor fill:#eef4fb,stroke:#a4c2f4,stroke-width:2px,color:#000000;
     classDef yolo fill:#f9d0c4,stroke:#f28b82,stroke-width:2px,color:#000000;
+    classDef risk fill:#cfe2f3,stroke:#9fc5e8,stroke-width:2px,color:#000000;
     classDef save fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
-    classDef learning fill:#e6b8af,stroke:#cc0000,stroke-width:2px,color:#000000,stroke-dasharray: 5 5;
 
-    A["Optuna Optimizer<br/>(optimizer.py)<br/>- Sun Altitude<br/>- Precipitation<br/>- Fog Density"]:::optuna
-    B["CARLA Environment<br/>Mock or Real<br/>(carla_mock.py)"]:::params
-    C["YOLOv8 detect (ONNX)<br/>on sensor image"]:::env
-    D["Precision Metrics<br/>Count Objects<br/>Total Confidence"]:::sensor
-    E["Update optimum<br/>parameters"]:::yolo
-    F["Save Edge Case Image<br/>(results/)"]:::save
-    G["Dataset Augmentation<br/>(Add Edge Cases)"]:::learning
-    H["Retrain / Fine-tune<br/>YOLOv8 Model"]:::learning
+    A["Optuna Optimizer<br/>(optimizer.py)"]:::optuna
+    B["CARLA Environment<br/>Mock or Real"]:::env
+    C["YOLO3D Emulator<br/>(evaluator.py)"]:::yolo
+    D["Risk Calculator<br/>(risk_calculator.py)"]:::risk
+    E["Save Edge Case<br/>(results/)"]:::save
 
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E -.->|Optimization Loop| A
-    E -.->|If Worst Edge Case| F
-    F -->|Collect Data Planned| G
-    G -->|Train Planned| H
-    H -->|Update Weights Planned| C
+    A -- "1. Suggest Weather" --> B
+    B -- "2. Sensor Image" --> C
+    B -- "3. GT Kinematics" --> D
+    C -- "4. Subjective Z-distance" --> D
+    D -- "5. Minimize R_perceived" --> A
+    D -.->|If Worst Edge Case| E
 ```
 
-## Project Structure
+### 🧮 The Perceived Risk Formula
+The `RiskCalculator` computes how dangerous a situation is perceived by the AI:
 
-- `optimizer.py`: The main execution script. It uses Optuna to optimize weather parameters (minimize recognition rate).
-- `carla_mock.py`: Applies rain or fog effects to the base image (`base_image.png`) based on specified weather conditions.
-- `evaluator.py`: Uses YOLOv8 to evaluate the number of detected objects and their confidence scores in the image.
-- `visualizer.py`: Visualizes (plots) the history of search results.
-- `carla_real_template.py`: A code template for connecting to the actual CARLA simulator.
+$$ R_{perceived} = K \times \frac{\omega \cdot \mu \cdot \alpha \cdot \beta}{\hat{r}^2 + \epsilon} + C $$
 
-## Setup
+- **$\omega$ (Interaction Weight)**: Are we approaching the target? (1.0 for approaching, 0.1 for separating).
+- **$\mu$ (Class Factor)**: Danger coefficient based on object class (e.g., Pedestrian=1.5, Truck=1.2).
+- **$\alpha$ (Speed Amplification)**: Exponentially increases based on the closing speed.
+- **$\beta$ (Lateral Attenuation)**: Exponentially decreases if the object is not directly in the ego vehicle's path.
+- **$\hat{r}$ (YOLO3D Z-distance)**: The AI's *subjective* estimation of the object's distance. If detection fails, $\hat{r} = \infty$, making $R_{perceived}$ approach 0 (AI incorrectly thinks it is perfectly safe).
 
-### 1. Install dependency libraries
+---
 
+## 🚀 How to Run the Pipeline (For Team Members)
+
+We have provided wrapper scripts to make it easy for anyone on the team to run the pipeline and generate results.
+
+### 1. Prerequisites
+Ensure you have Python 3.8+ installed.
+
+### 2. Run the Optimization
+Simply execute the provided script for your OS. It will automatically install dependencies and start the Optuna search loop.
+
+**For Windows:**
+```cmd
+run_pipeline.bat
+```
+
+**For Linux / macOS:**
 ```bash
-pip install -r requirements.txt
+bash run_pipeline.sh
 ```
 
-### 2. Verify operation (mock environment)
+### 3. Review the Results
+Once the pipeline finishes, check the `results/` directory:
+- **`edge_case_worst_TPE.jpg`**: The image where the AI failed the hardest (lowest perceived risk in a dangerous situation).
+- **`edge_case_best_TPE.jpg`**: The image where the AI detected the object perfectly.
+- **`history_tpe.csv`**: A full log of all trials, weather parameters, GT data, and calculated risk scores.
 
-First, let’s run the pipeline in a mock environment.
+---
 
-```bash
-python optimizer.py
-```
+## 📁 Project Structure
+- `optimizer.py`: The main Optuna execution loop.
+- `risk_calculator.py`: Contains the Perceived Risk mathematical formula.
+- `evaluator.py`: Emulates YOLO3D depth perception using YOLOv8 bounding boxes.
+- `carla_mock.py`: A mock environment applying weather effects to `base_image.png`.
+- `carla_real_template.py`: Code template for integrating with the actual CARLA simulator.
+- `results/`: Directory where edge case images and CSV histories are saved.
 
-After execution, the "most difficult image to recognize (edge case)" and the "easiest image to recognize" will be saved in the `results/` directory.
+---
 
-## How to Integrate with the CARLA Simulator
-
-To use this in a real CARLA environment, follow the steps below.
-
-1. **Install the CARLA Simulator**: Download the simulator from [the official CARLA website](https://carla.org/) and launch it.
-2. **Implementing the connection class**: Refer to `carla_real_template.py` to create a class that retrieves images from the actual camera sensor.
-3. **Replacing the environment**: In `optimizer.py`, replace the section where `MockCarlaEnv` is imported with the new class you created.
-
-```python
-# optimizer.py
-# from carla_mock import MockCarlaEnv
-from my_carla_env import RealCarlaEnv
-
-# env = MockCarlaEnv("base_image.png")
-env = RealCarlaEnv()
-```
-
-## Contributions and Sharing
-
-When pushing this repository to GitHub, be sure to include `base_image.png` so that other users can immediately verify that it works. CARLA itself is not included in the repository; it is assumed that you will set it up in your own environment.
+## 🤝 Integrating with the Real CARLA Simulator
+1. **Install CARLA**: Download from the [official CARLA website](https://carla.org/).
+2. **Implement Connection**: Use `carla_real_template.py` to create a class that fetches live camera sensors and ground truth data.
+3. **Swap Environments**: In `optimizer.py`, replace `MockCarlaEnv` with your new CARLA environment class.
