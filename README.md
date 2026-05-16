@@ -84,6 +84,12 @@ Once the pipeline finishes, check the `results/` directory:
 ---
 
 ## 🤝 Integrating with the Real CARLA Simulator
+
+For detailed instructions on how to transition from the mock environment to a live CARLA simulation, please refer to our:
+
+👉 **[CARLA Integration Guide](CARLA_INTEGRATION_GUIDE.md)**
+
+### Quick Summary:
 1. **Install CARLA**: Download from the [official CARLA website](https://carla.org/).
 2. **Implement Connection**: Use `carla_real_template.py` to create a class that fetches live camera sensors and ground truth data.
 3. **Swap Environments**: In `optimizer.py`, replace `MockCarlaEnv` with your new CARLA environment class.
