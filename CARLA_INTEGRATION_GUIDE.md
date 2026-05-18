@@ -1,88 +1,66 @@
-# CARLA Simulator Integration Guide
+# 確定版・CARLA×YOLO3D統合ロードマップ
 
-This guide provides step-by-step instructions for team members to transition the pipeline from the **Mock Environment** to the **Real CARLA Simulator**.
-
----
-
-## 1. Prerequisites
-- **CARLA Simulator**: Install version 0.9.13 or later from the [official CARLA releases](https://github.com/carla-simulator/carla/releases).
-- **Python API**: Ensure you have the `carla` Python package installed.
-  ```bash
-  pip install carla
-  ```
+このロードマップは、本研究のコアロジックを実際のシミュレーター環境へ実装するための詳細なチェックリストです。
 
 ---
 
-## 2. Setting Up the Bridge (`RealCarlaEnv`)
-The pipeline is designed to be environment-agnostic. To use the real simulator, you need to complete the implementation in `carla_real_template.py`.
+## 2. シミュレーション環境の詳細定義 (Simulation Scene Definition)
 
-### Step 2.1: Spawn the Ego Vehicle & Camera
-In `RealCarlaEnv.__init__` or a setup method, you must:
-1. Find a blueprint for a vehicle (e.g., `model3`).
-2. Spawn it at a recommended transform.
-3. Attach an `rgb_camera` to the vehicle.
-4. Use `.listen()` on the camera to capture images into a buffer.
+研究の再現性と比較精度を高めるため、以下の標準環境をベースラインとして構築します。
 
-### Step 2.2: Implement Ground Truth Retrieval
-The `RiskCalculator` requires Ground Truth (GT) data. In `carla_real_template.py`, implement a `get_ground_truth()` method:
-```python
-def get_ground_truth(self):
-    # Retrieve actual data from the CARLA world
-    ego_transform = self.vehicle.get_transform()
-    ego_velocity = self.vehicle.get_velocity()
-    
-    # Similarly for the target vehicle (lead car)
-    target_transform = self.target_vehicle.get_transform()
-    target_velocity = self.target_vehicle.get_velocity()
+### 2.1 使用マップと配置
+*   **マップ**: `Town01` または `Town03`（標準的な都市・郊外路）。
+*   **自車 (Ego Vehicle)**: `vehicle.tesla.model3`（フロントカメラ1基搭載）。
+*   **ターゲット**: 以下のいずれかをシナリオに応じて選択・配置。
+    - 普通乗用車: `vehicle.audi.tt`
+    - **大型トラック**: `vehicle.carlamotors.carlacola`（視覚的占有面積が大きく、車種係数 $\mu$ が高い）
+    - 歩行者: `walker.pedestrian.0001`
+*   **シナリオ**: 直線道路での追従、または交差点手前での停止車両への接近。車両配置は「晴天なら確実に回避可能」な安全な距離に固定する。
 
-    return {
-        'ego_pos': [ego_transform.location.x, ego_transform.location.y, ego_transform.location.z],
-        'ego_vel': [ego_velocity.x, ego_velocity.y, ego_velocity.z],
-        'target_pos': [target_transform.location.x, target_transform.location.y, target_transform.location.z],
-        'target_vel': [target_velocity.x, target_velocity.y, target_velocity.z],
-        'target_class': 'car' # Or dynamically determine
-    }
-```
+### 2.2 センサー設定 (Front Camera)
+*   **Location**: `x=2.0, y=0.0, z=1.4` (フロントガラス上部)
+*   **Rotation**: `pitch=-5.0, yaw=0.0, roll=0.0` (やや下向き)
+*   **Resolution**: `1280 x 720`
+*   **FOV**: `110.0`
+
+### 2.3 最適化対象（探索空間）
+Optunaが操作する環境変数の範囲を以下に定義します。
+*   `sun_altitude_angle`: `-20.0` to `90.0` (夜間から真昼、特に15度前後の西日を重点探索)
+*   `fog_density`: `0.0` to `100.0`
+*   `precipitation`: `0.0` to `100.0`
+*   `wetness`: `0.0` to `100.0` (路面反射の影響)
 
 ---
 
-## 3. Switching the Pipeline to Real CARLA
-Once your `RealCarlaEnv` class is ready, update `optimizer.py`:
+### フェーズ1：実験環境の固定と自動リセット（土台づくり）
+*   [ ] **同期モード（Synchronous Mode）の確立**：CARLAの1フレームの進行、YOLO3Dの推論、リスク数式計算のクロックタイミングを完全に一致させる。
+*   [ ] **SafeBenchシナリオの固定**：評価対象とする交差点や直線のシナリオ（他車の初期配置・速度ベクトル）を1つに固定してロードする。
+*   [ ] **1トライアルごとの自動クリーンアップ**：Optunaが新しい天候を試すたびに、車両の位置や天候、蓄積されたスコアを完全に初期状態にリセットする仕組み（`try...finally`）の実装。
 
-```python
-# --- optimizer.py ---
+### フェーズ2：光学環境（ツマミ）とカメラのセットアップ
+*   [ ] **天候パラメータ操作APIの紐付け**：`carla.WeatherParameters` を使い、Optunaが操作する4つの変数（`cloudiness`, `precipitation`, `sun_altitude_angle`, `wetness`）をリアルタイムにCARLA環境へ反映させるブリッジの作成。
+*   [ ] **フロントカメラの配置固定**：YOLO3Dへの画像供給用RGBカメラセンサーを設置し、位置・画角（FOV）を固定する。
 
-# 1. Import your real environment
-from carla_real_template import RealCarlaEnv 
+### フェーズ3：ハイブリッドデータブリッジ（数式への入力）
+*   [ ] **ルートA：CARLA物理真値（GT）の抽出**：自車と相手車の本当の速度（`get_velocity()`）と座標（`get_transform().location`）を取得し、数式の分子（接近速度 $\alpha_i^t$ や角度 $\beta_i^t$）に流し込むロジックの実装。
+*   [ ] **ルートB：YOLO3D主観値の抽出**：フロントカメラ画像（悪天候ノイズ入り）をYOLO3Dに入力し、出力された相対3D中心座標の奥行き情報（$Z_{pred}$）を数式の分母の $\hat{r}_i^t$ にダイレクトに代入するパイプラインの構築。
+*   [ ] **座標系の変換**：YOLO3Dの出力座標系（OpenCV系など）とCARLAの3次元座標系の軸の向きを合わせる単純な変換関数の作成。
 
-if __name__ == "__main__":
-    # 2. Swap MockCarlaEnv with RealCarlaEnv
-    # env = MockCarlaEnv("base_image.png")
-    env = RealCarlaEnv(host='127.0.0.1', port=2000)
-    
-    # The rest of the pipeline remains the same!
-    evaluator = YoloEvaluator()
-    risk_calc = RiskCalculator()
-    # ...
-```
+### フェーズ4：最適化ループ（Optuna）の結合
+*   [ ] **目的関数（Objective Function）の実装**：各フレームの知覚リスクスコアを配列に蓄積し、テスト終了時に「スコアの一瞬の跳ね上がり幅（または最大値）」を計算して、Optunaに返す関数を作る。
+*   [ ] **最適化の実行**：Optunaの `study.optimize()` を回し、最も高い手遅れリスクを叩き出す天候パラメータの組み合わせを出力させる。
 
 ---
 
-## 4. Running the Real-World Search
-1. Start the CARLA Simulator first.
-2. Run the pipeline:
-   ```bash
-   python optimizer.py
-   ```
-3. The simulator weather will now change automatically during each Optuna trial, and the AI will evaluate the real sensor feed.
+### フェーズ5：安定化・リソース管理・データ収集（完走のために）
+研究を停滞させないための、運用上の重要なチェックポイントです。
 
----
-
-## 💡 Important Considerations
-- **Synchronization**: Use CARLA's **Synchronous Mode** for reliable data collection.
-  ```python
-  settings = self.world.get_settings()
-  settings.synchronous_mode = True
-  self.world.apply_settings(settings)
-  ```
-- **Cleanup**: Always ensure you destroy spawned actors (vehicles/sensors) when the optimization finishes to avoid ghost actors in the next run.
+*   [ ] **GPUリソースの競合回避**：
+    - CARLAの描画設定を「Low」に設定し、VRAM不足によるクラッシュを防ぐ。
+    - シミュレーターのFPSとYOLOの推論FPSの同期バランスを調整する。
+*   [ ] **エビデンス（動画）の自動記録**：
+    - Optunaが「過去最高の知覚リスク（手遅れシナリオ）」を更新した際、そのトライアルの前後数秒間の画像を動画として保存するロジックの実装。
+*   [ ] **定数 $K, C, \epsilon$ のキャリブレーション**：
+    - 正常な認識時と異常な認識時で、スコアが明確に「跳ね上がる」ように数式内の定数を調整する。
+*   [ ] **長期実行時の堅牢性**：
+    - 大量の試行（100回〜）を行う場合に備え、エラー発生時に自動でトライアルをスキップ、またはCARLAを再起動して再開する例外処理の実装。

@@ -1,95 +1,42 @@
-# CARLA Edge Case Search & Active Learning Pipeline
+# 物理パラメータ最適化による単眼3D物体検出のエッジケース高速探索
 
-This project is a pipeline designed to automatically identify **"edge cases" (adverse weather conditions)** where the recognition accuracy of autonomous driving AI declines. By using an efficient search algorithm (Optuna), it discovers critical scenarios where the AI mistakenly perceives a dangerous situation as safe.
+本プロジェクトは、カメラオンリーの自動運転認識システムが内包する「光学的な脆弱性」を、シミュレータ（CARLA）とベイズ最適化（Optuna）を用いて精密かつ高速に特定するための研究パイプラインです。
 
-Currently, functionality can be verified using an image-processing-based mock environment (`carla_mock.py`) with a **YOLO3D Emulator** built on top of YOLOv8. In the future, this pipeline will be extended into an **Active Learning Loop**, where the discovered edge cases are automatically used to retrain and improve the AI model.
+## 🎯 研究のコアコンセプト
+既存の重い動画生成AI（Diffusionモデル等）を使わず、シミュレータの物理パラメータを直接ハックすることで、**「実際は危険なのに、AIが安全だと誤認している（知覚リスクが低い）瞬間」**を逆算的に探索します。
 
----
-
-## 🏗️ Pipeline Architecture
-
-The pipeline calculates the **Perceived Risk ($R_{perceived}$)** by comparing Ground Truth (GT) kinematics with the AI's subjective perception (YOLO3D Z-distance). Optuna **minimizes** this risk score to find the most dangerous edge cases (e.g., scenarios where GT is highly dangerous but the AI fails to detect it, resulting in a low perceived risk).
-
-```mermaid
-flowchart LR
-    classDef optuna fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
-    classDef env fill:#d9ead3,stroke:#93c47d,stroke-width:2px,color:#000000;
-    classDef yolo fill:#f9d0c4,stroke:#f28b82,stroke-width:2px,color:#000000;
-    classDef risk fill:#cfe2f3,stroke:#9fc5e8,stroke-width:2px,color:#000000;
-    classDef save fill:#fff2cc,stroke:#ffd966,stroke-width:2px,color:#000000;
-
-    A["Optuna Optimizer<br/>(optimizer.py)"]:::optuna
-    B["CARLA Environment<br/>Mock or Real"]:::env
-    C["YOLO3D Emulator<br/>(evaluator.py)"]:::yolo
-    D["Risk Calculator<br/>(risk_calculator.py)"]:::risk
-    E["Save Edge Case<br/>(results/)"]:::save
-
-    A -- "1. Suggest Weather" --> B
-    B -- "2. Sensor Image" --> C
-    B -- "3. GT Kinematics" --> D
-    C -- "4. Subjective Z-distance" --> D
-    D -- "5. Minimize R_perceived" --> A
-    D -.->|If Worst Edge Case| E
-```
-
-### 🧮 The Perceived Risk Formula
-The `RiskCalculator` computes how dangerous a situation is perceived by the AI:
-
-$$ R_{perceived} = K \times \frac{\omega \cdot \mu \cdot \alpha \cdot \beta}{\hat{r}^2 + \epsilon} + C $$
-
-- **$\omega$ (Interaction Weight)**: Are we approaching the target? (1.0 for approaching, 0.1 for separating).
-- **$\mu$ (Class Factor)**: Danger coefficient based on object class (e.g., Pedestrian=1.5, Truck=1.2).
-- **$\alpha$ (Speed Amplification)**: Exponentially increases based on the closing speed.
-- **$\beta$ (Lateral Attenuation)**: Exponentially decreases if the object is not directly in the ego vehicle's path.
-- **$\hat{r}$ (YOLO3D Z-distance)**: The AI's *subjective* estimation of the object's distance. If detection fails, $\hat{r} = \infty$, making $R_{perceived}$ approach 0 (AI incorrectly thinks it is perfectly safe).
+特に、悪天候によって認識が遅れ、衝突直前にリスクスコアが急上昇する**「手遅れシナリオ」**の特定にフォーカスしています。
 
 ---
 
-## 🚀 How to Run the Pipeline (For Team Members)
+## 📚 主要ドキュメント（ゼミ・学会用）
 
-We have provided wrapper scripts to make it easy for anyone on the team to run the pipeline and generate results.
+プロジェクトの背景、論理構成、および実装計画については以下の資料を参照してください：
 
-### 1. Prerequisites
-Ensure you have Python 3.8+ installed.
-
-### 2. Run the Optimization
-Simply execute the provided script for your OS. It will automatically install dependencies and start the Optuna search loop.
-
-**For Windows:**
-```cmd
-run_pipeline.bat
-```
-
-**For Linux / macOS:**
-```bash
-bash run_pipeline.sh
-```
-
-### 3. Review the Results
-Once the pipeline finishes, check the `results/` directory:
-- **`edge_case_worst_TPE.jpg`**: The image where the AI failed the hardest (lowest perceived risk in a dangerous situation).
-- **`edge_case_best_TPE.jpg`**: The image where the AI detected the object perfectly.
-- **`history_tpe.csv`**: A full log of all trials, weather parameters, GT data, and calculated risk scores.
+1.  **[研究計画書 (RESEARCH_PLAN.md)](RESEARCH_PLAN.md)**
+    *   研究背景、問題設定、および「知覚リスク評価式」の数学的定義。
+2.  **[発表用スクリプト (PRESENTATION_SCRIPT.md)](PRESENTATION_SCRIPT.md)**
+    *   ゼミや学会での発表を想定した、全9枚のスライド構成とセリフ案。
+3.  **[CARLA統合ロードマップ (CARLA_INTEGRATION_GUIDE.md)](CARLA_INTEGRATION_GUIDE.md)**
+    *   実際のCARLAシミュレーターとYOLO3Dを統合するための詳細な実装チェックリスト。
+4.  **[初心者向けガイド (BEGINNERS_GUIDE.md)](BEGINNERS_GUIDE.md)**
+    *   チームメンバーが環境を構築し、まずモック環境で動作確認するための手順書。
 
 ---
 
-## 📁 Project Structure
-- `optimizer.py`: The main Optuna execution loop.
-- `risk_calculator.py`: Contains the Perceived Risk mathematical formula.
-- `evaluator.py`: Emulates YOLO3D depth perception using YOLOv8 bounding boxes.
-- `carla_mock.py`: A mock environment applying weather effects to `base_image.png`.
-- `carla_real_template.py`: Code template for integrating with the actual CARLA simulator.
-- `results/`: Directory where edge case images and CSV histories are saved.
+## 🚀 クイックスタート（モック環境）
+
+まずは、シミュレーターなしでロジックを確認できる「モック環境」で動作を検証してください。
+
+1.  **依存ライブラリのインストール**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+2.  **パイプラインの実行**:
+    *   Windows: `run_pipeline.bat`
+    *   Linux/macOS: `bash run_pipeline.sh`
 
 ---
 
-## 🤝 Integrating with the Real CARLA Simulator
-
-For detailed instructions on how to transition from the mock environment to a live CARLA simulation, please refer to our:
-
-👉 **[CARLA Integration Guide](CARLA_INTEGRATION_GUIDE.md)**
-
-### Quick Summary:
-1. **Install CARLA**: Download from the [official CARLA website](https://carla.org/).
-2. **Implement Connection**: Use `carla_real_template.py` to create a class that fetches live camera sensors and ground truth data.
-3. **Swap Environments**: In `optimizer.py`, replace `MockCarlaEnv` with your new CARLA environment class.
+## 🏗️ 開発状況とロードマップ
+現在は、画像処理ベースのモック環境にて「知覚リスク計算ロジック」と「Optunaによる探索ループ」の統合が完了しています。次のフェーズでは、[CARLA統合ロードマップ](CARLA_INTEGRATION_GUIDE.md)に基づき、実機シミュレーターとの完全同期を進めます。
