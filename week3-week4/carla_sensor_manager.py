@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 CARLA Sensor Manager
-センサーのスポーンとデータ変換（生データ -> Numpy配列/オブジェクト）を独立してカプセル化したモジュール。
-Colabチュートリアルに基づき、RGBカメラに加えて、セマンティックセグメンテーション、LiDAR、Radar、IMU、GNSSに対応しました。
+センサーのスポーンとデータ変換をカプセル化したモジュール。
+貼り付けられたColabチュートリアルの正確なパラメータ設定（解像度1280x720、各更新レートなど）に完全に準拠して実装しています。
 """
 import numpy as np
 import weakref
@@ -28,11 +28,13 @@ class CarlaSensorManager:
         self.bp_library = self.world.get_blueprint_library()
 
     def spawn_rgb_camera(self, transform, role_name='rgb_front'):
-        """単眼RGBカメラをスポーンして車両に取り付ける"""
+        """単眼RGBカメラをスポーンして車両に取り付ける (Tutorial 4.1に完全準拠)"""
         camera_bp = self.bp_library.find('sensor.camera.rgb')
-        camera_bp.set_attribute('image_size_x', '800')
-        camera_bp.set_attribute('image_size_y', '600')
+        # チュートリアルと同一の設定
+        camera_bp.set_attribute('image_size_x', '1280')
+        camera_bp.set_attribute('image_size_y', '720')
         camera_bp.set_attribute('fov', '90')
+        camera_bp.set_attribute('sensor_tick', '0.1')  # 10 Hz (0.1秒間隔)
         
         camera = self.world.spawn_actor(camera_bp, transform, attach_to=self.vehicle)
         self.sensors.append(camera)
@@ -42,11 +44,13 @@ class CarlaSensorManager:
         return camera
 
     def spawn_semantic_segmentation_camera(self, transform, role_name='seg_front'):
-        """セマンティックセグメンテーションカメラをスポーンして車両に取り付ける"""
+        """セマンティックセグメンテーションカメラをスポーンして車両に取り付ける (Tutorial 4.2に完全準拠)"""
         seg_bp = self.bp_library.find('sensor.camera.semantic_segmentation')
-        seg_bp.set_attribute('image_size_x', '800')
-        seg_bp.set_attribute('image_size_y', '600')
+        # チュートリアルと同一の設定 (RGBカメラのレートに合わせる)
+        seg_bp.set_attribute('image_size_x', '1280')
+        seg_bp.set_attribute('image_size_y', '720')
         seg_bp.set_attribute('fov', '90')
+        seg_bp.set_attribute('sensor_tick', '0.1')
         
         seg_cam = self.world.spawn_actor(seg_bp, transform, attach_to=self.vehicle)
         self.sensors.append(seg_cam)
@@ -56,13 +60,14 @@ class CarlaSensorManager:
         return seg_cam
 
     def spawn_lidar(self, transform, role_name='lidar'):
-        """LiDAR（レーザースキャナー）をスポーンして車両に取り付ける"""
+        """LiDARをスポーンして車両に取り付ける (Tutorial 4.3に完全準拠)"""
         lidar_bp = self.bp_library.find('sensor.lidar.ray_cast')
+        # チュートリアルと同一の設定
         lidar_bp.set_attribute('range', '50.0')                  # 50m範囲
         lidar_bp.set_attribute('channels', '32')                 # 32レイ
         lidar_bp.set_attribute('points_per_second', '56000')     # 点群生成レート
         lidar_bp.set_attribute('rotation_frequency', '10')       # 10Hz
-        lidar_bp.set_attribute('sensor_tick', '0.05')            # 20 FPS (制御周期と同期)
+        lidar_bp.set_attribute('sensor_tick', '0.1')             # 10Hz (0.1秒間隔)
         
         lidar = self.world.spawn_actor(lidar_bp, transform, attach_to=self.vehicle)
         self.sensors.append(lidar)
@@ -72,12 +77,13 @@ class CarlaSensorManager:
         return lidar
 
     def spawn_radar(self, transform, role_name='radar'):
-        """レーダーをスポーンして車両に取り付ける"""
+        """レーダーをスポーンして車両に取り付ける (Tutorial 4.4に完全準拠)"""
         radar_bp = self.bp_library.find('sensor.other.radar')
+        # チュートリアルと同一の設定
         radar_bp.set_attribute('horizontal_fov', '30')
         radar_bp.set_attribute('vertical_fov', '30')
-        radar_bp.set_attribute('range', '100.0')
-        radar_bp.set_attribute('sensor_tick', '0.05')            # 20 FPS
+        radar_bp.set_attribute('range', '100')
+        radar_bp.set_attribute('sensor_tick', '0.1')             # 10Hz (0.1秒間隔)
         
         radar = self.world.spawn_actor(radar_bp, transform, attach_to=self.vehicle)
         self.sensors.append(radar)
@@ -87,9 +93,10 @@ class CarlaSensorManager:
         return radar
 
     def spawn_imu(self, transform, role_name='imu'):
-        """IMU（慣性計測ユニット）をスポーンして車両に取り付ける"""
+        """IMUをスポーンして車両に取り付ける (Tutorial 4.5に完全準拠)"""
         imu_bp = self.bp_library.find('sensor.other.imu')
-        imu_bp.set_attribute('sensor_tick', '0.05')              # 20 FPS
+        # チュートリアルと同一の設定
+        imu_bp.set_attribute('sensor_tick', '0.05')              # 20Hz (0.05秒間隔)
         
         imu = self.world.spawn_actor(imu_bp, transform, attach_to=self.vehicle)
         self.sensors.append(imu)
@@ -99,11 +106,12 @@ class CarlaSensorManager:
         return imu
 
     def spawn_gnss(self, transform, role_name='gnss'):
-        """GNSS（GPS受信機）をスポーンして車両に取り付ける"""
+        """GNSS (GPS) をスポーンして車両に取り付ける (Tutorial 4.6に完全準拠)"""
         gnss_bp = self.bp_library.find('sensor.other.gnss')
-        gnss_bp.set_attribute('sensor_tick', '0.05')              # 20 FPS
+        # チュートリアルと同一の設定
+        gnss_bp.set_attribute('sensor_tick', '0.5')               # 2Hz (0.5秒間隔)
         
-        gnss = self.world.spawn_actor(gnss_bp, transform, attach_to=self.vehicle)
+        gnss = self.world.spawn_actor(gnss_bp, gnss_transform, attach_to=self.vehicle)
         self.sensors.append(gnss)
         
         weak_self = weakref.ref(self)
@@ -144,7 +152,6 @@ class CarlaSensorManager:
         self = weak_self()
         if not self:
             return
-        # CityScapesパレットを適用して色つき画像に変換
         image.convert(carla.ColorConverter.CityScapesPalette)
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (image.height, image.width, 4))
@@ -158,7 +165,6 @@ class CarlaSensorManager:
         self = weak_self()
         if not self:
             return
-        # 1Dの浮動小数点バッファを [x, y, z, intensity] にリシェイプ
         lidar_points = np.frombuffer(data.raw_data, dtype=np.float32)
         lidar_points = np.reshape(lidar_points, (-1, 4))
         self.sensor_data[role_name] = lidar_points
@@ -168,7 +174,6 @@ class CarlaSensorManager:
         self = weak_self()
         if not self:
             return
-        # 1Dの浮動小数点バッファを [velocity, azimuth, altitude, depth] にリシェイプ
         radar_points = np.frombuffer(data.raw_data, dtype=np.float32)
         radar_points = np.reshape(radar_points, (-1, 4))
         self.sensor_data[role_name] = radar_points
@@ -181,7 +186,7 @@ class CarlaSensorManager:
         self.sensor_data[role_name] = {
             'accel': (data.accelerometer.x, data.accelerometer.y, data.accelerometer.z),
             'gyro': (data.gyroscope.x, data.gyroscope.y, data.gyroscope.z),
-            'compass': data.compass # ラジアン単位のヘディング角
+            'compass': data.compass
         }
 
     @staticmethod
@@ -196,17 +201,14 @@ class CarlaSensorManager:
         }
 
     def get_image(self, role_name='rgb_front'):
-        """単眼カメラ等の画像を取得する"""
         if role_name in self.image_data:
             return self.image_data.get(role_name)
         return self.sensor_data.get(role_name)
 
     def get_sensor_data(self, role_name):
-        """各種センサーの最新データを取得する"""
         return self.sensor_data.get(role_name)
 
     def destroy(self):
-        """終了時に全センサーをクリーンアップする"""
         for sensor in self.sensors:
             if sensor.is_alive:
                 sensor.stop()

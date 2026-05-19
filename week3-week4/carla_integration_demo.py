@@ -2,10 +2,9 @@
 """
 CARLA Integration Demo (統合メインループ & 制御チューニング用スクリプト)
 
-このスクリプトは、Gitリポジトリをクローンした開発チームメンバーが、
-自身のPC環境でCARLAに接続し、PID制御（車線追従・速度制御）と、
-車両に取り付けられた各種センサー（RGBカメラ、セマンティックカメラ、LiDAR、Radar、IMU、GNSS）の
-生データを可視化・分析するための統合環境プログラムです。
+貼り付けられたColabチュートリアルの実装（Step 1〜7）に完全に準拠しています。
+Ego車両として Cybertruck をスポーンし、前方10mに静的障害物（Model 3）を配置、
+チュートリアルで定義された各マウント位置・角度に6センサーを設置します。
 """
 
 import time
@@ -82,7 +81,7 @@ def main():
         print(f"CARLAシミュレータが起動していること、およびポート {args.port} が開放されていることを確認してください。")
         sys.exit(1)
         
-    # シミュレータ同期モードの設定（シミュレータとPython制御周期を完全に一致させる）
+    # シミュレータ同期モードの設定
     settings = world.get_settings()
     original_settings = world.get_settings()  # 終了時の復元用
     
@@ -109,25 +108,25 @@ def main():
         # --- [車両と障害物のスポーン] ---
         blueprint_library = world.get_blueprint_library()
         
-        # 1. Ego車両のスポーン (Tesla Model 3)
-        vehicle_bp = blueprint_library.filter('model3')[0]
+        # 1. Ego車両のスポーン (Tesla Cybertruck: Tutorial Step 3に準拠)
+        ego_bp = blueprint_library.find('vehicle.tesla.cybertruck')
         spawn_points = world.get_map().get_spawn_points()
-        spawn_point = spawn_points[0]
-        vehicle = world.spawn_actor(vehicle_bp, spawn_point)
-        print(f"Ego Vehicle spawned successfully (ID: {vehicle.id}).")
+        spawn_point = spawn_points[0] if spawn_points else carla.Transform()
+        vehicle = world.spawn_actor(ego_bp, spawn_point)
+        print(f"Ego Vehicle spawned successfully (Tesla Cybertruck, ID: {vehicle.id}).")
         
-        # 2. 静的障害物車両のスポーン (前方12mの位置にTesla Model 3を配置: Tutorial Step 5)
+        # 2. 静的障害物車両のスポーン (前方10mの位置にTesla Model 3を配置: Tutorial Step 5に準拠)
         obstacle_bp = blueprint_library.find('vehicle.tesla.model3')
         ego_tf = vehicle.get_transform()
         forward_vector = ego_tf.get_forward_vector()
-        obs_location = ego_tf.location + forward_vector * 12.0
+        obs_location = ego_tf.location + forward_vector * 10.0
         obs_rotation = ego_tf.rotation
         obstacle_transform = carla.Transform(obs_location, obs_rotation)
         
         obstacle_vehicle = world.try_spawn_actor(obstacle_bp, obstacle_transform)
         if obstacle_vehicle:
-            print(f"Obstacle Vehicle spawned successfully 12m ahead (ID: {obstacle_vehicle.id}).")
-            obstacle_vehicle.set_autopilot(False)  # 障害物なので自動運転はOFF（静止状態）
+            print(f"Obstacle Vehicle spawned successfully 10m ahead (Tesla Model 3, ID: {obstacle_vehicle.id}).")
+            obstacle_vehicle.set_autopilot(False)  # 障害物なので静止
         else:
             print("【警告】障害物車両のスポーンに失敗しました（スポーン位置競合の可能性があります）")
         
@@ -140,26 +139,32 @@ def main():
         controller.lon_kp, controller.lon_ki, controller.lon_kd = args.kp_lon, args.ki_lon, args.kd_lon
         controller.lat_kp, controller.lat_ki, controller.lat_kd = args.kp_lat, args.ki_lat, args.kd_lat
         
-        # --- [各種センサーの設置 (Tutorial Step 4)] ---
-        # 1. RGBカメラ & セマンティック・セグメンテーション・カメラ（フロントガラス高さに設置）
-        cam_transform = carla.Transform(carla.Location(x=1.5, z=1.7), carla.Rotation(pitch=-10.0))
+        # --- [各種センサーの設置 (Tutorial Step 4に完全準拠)] ---
+        # 4.1 & 4.2 RGBカメラ & セマンティックカメラ（フロントガラス高さに設置）
+        cam_location = carla.Location(x=1.5, y=0.0, z=1.7)
+        cam_rotation = carla.Rotation(pitch=-10.0, yaw=0.0, roll=0.0)
+        cam_transform = carla.Transform(cam_location, cam_rotation)
         sensor_manager.spawn_rgb_camera(cam_transform, role_name='rgb_front')
         sensor_manager.spawn_semantic_segmentation_camera(cam_transform, role_name='seg_front')
         
-        # 2. LiDAR（ルーフ中央）
-        lidar_transform = carla.Transform(carla.Location(x=0.0, z=2.5))
+        # 4.3 LiDAR（ルーフ中央）
+        lidar_location = carla.Location(x=0.0, y=0.0, z=2.5)
+        lidar_rotation = carla.Rotation(pitch=0.0)
+        lidar_transform = carla.Transform(lidar_location, lidar_rotation)
         sensor_manager.spawn_lidar(lidar_transform, role_name='lidar')
         
-        # 3. Radar（フロントバンパー）
-        radar_transform = carla.Transform(carla.Location(x=2.0, z=0.5))
+        # 4.4 Radar（フロントバンパー）
+        radar_location = carla.Location(x=2.0, y=0.0, z=0.5)
+        radar_rotation = carla.Rotation(pitch=0.0, yaw=0.0)
+        radar_transform = carla.Transform(radar_location, radar_rotation)
         sensor_manager.spawn_radar(radar_transform, role_name='radar')
         
-        # 4. IMU（車体中心）
-        imu_transform = carla.Transform(carla.Location(x=0.0, z=0.0))
+        # 4.5 IMU（車体中心）
+        imu_transform = carla.Transform(carla.Location(x=0.0, y=0.0, z=0.0))
         sensor_manager.spawn_imu(imu_transform, role_name='imu')
         
-        # 5. GNSS (GPS)（ルーフ中央）
-        gnss_transform = carla.Transform(carla.Location(x=0.0, z=2.5))
+        # 4.6 GNSS (GPS)（ルーフ中央）
+        gnss_transform = carla.Transform(carla.Location(x=0.0, y=0.0, z=2.5))
         sensor_manager.spawn_gnss(gnss_transform, role_name='gnss')
         
         print("All sensors initialized. Starting autonomous loop... (Press Ctrl+C to stop)")
@@ -206,7 +211,7 @@ def main():
             vehicle.apply_control(control_cmd)
             
             # ---------------------------------------------------------
-            # 3. Sensor Data Reading & Dashboard (可視化: Tutorial Step 6 & 7)
+            # 3. Sensor Data Reading & Dashboard (可視化: Tutorial Step 6 & 7に準拠)
             # ---------------------------------------------------------
             img_rgb = sensor_manager.get_image('rgb_front')
             img_seg = sensor_manager.get_image('seg_front')
@@ -216,59 +221,60 @@ def main():
             gnss_data = sensor_manager.get_sensor_data('gnss')
             
             if img_rgb is not None and img_seg is not None:
-                img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                seg_bgr = cv2.cvtColor(img_seg, cv2.COLOR_RGB2BGR)
+                # 画面縮小表示（1280x720 2台並びだと2560x720になり画面からはみ出る可能性があるため、ダッシュボード用に800x450にリサイズ）
+                img_resized = cv2.resize(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR), (800, 450))
+                seg_resized = cv2.resize(cv2.cvtColor(img_seg, cv2.COLOR_RGB2BGR), (800, 450))
                 
-                # RGB画像とセマンティックセグメンテーション画像を並べてダッシュボード化
-                dashboard = np.hstack((img_bgr, seg_bgr))
+                # ダッシュボードの結合 (1600x450)
+                dashboard = np.hstack((img_resized, seg_resized))
                 
                 # --- 左画面(RGB)へのPID制御情報オーバーレイ ---
-                cv2.putText(dashboard, "1. Front RGB Camera & PID Control", (20, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(dashboard, "1. Front RGB Camera (Cybertruck) & PID Control", (20, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
                 cv2.putText(dashboard, f"Speed: {speed_ms*3.6:.1f} km/h (Target: {target_speed*3.6:.1f})", (20, 65), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 cv2.putText(dashboard, f"CTE: {cte:.2f} m | Yaw Err: {steering_error:.2f} rad", (20, 95), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 cv2.putText(dashboard, f"Steer Cmd: {control_cmd.steer:.2f}", (20, 125), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 cv2.putText(dashboard, f"Throttle: {control_cmd.throttle:.2f} | Brake: {control_cmd.brake:.2f}", (20, 155), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
-                # --- 右画面(Seg)への各種センサー情報オーバーレイ (Tutorial Step 6) ---
-                cv2.putText(dashboard, "2. Semantic Cam & Sensor Suite", (820, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                # --- 右画面(Seg)への各種センサー情報オーバーレイ ---
+                cv2.putText(dashboard, "2. Semantic Camera & Sensor Suite (10Hz)", (820, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
                 
                 # LiDAR点群数
                 lidar_count = len(lidar_data) if lidar_data is not None else 0
                 cv2.putText(dashboard, f"LiDAR Points: {lidar_count} pts", (820, 65), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
                 # Radar検知点数
                 radar_count = len(radar_data) if radar_data is not None else 0
                 cv2.putText(dashboard, f"Radar Detections: {radar_count}", (820, 95), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
-                # IMUデータ
+                # IMUデータ (20Hz)
                 if imu_data is not None:
                     ax, ay, az = imu_data['accel']
                     gx, gy, gz = imu_data['gyro']
                     cv2.putText(dashboard, f"IMU Accel: [{ax:.2f}, {ay:.2f}, {az:.2f}] m/s^2", (820, 125), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                     cv2.putText(dashboard, f"IMU Gyro:  [{gx:.2f}, {gy:.2f}, {gz:.2f}] rad/s", (820, 155), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                     cv2.putText(dashboard, f"Compass Heading: {math.degrees(imu_data['compass']):.1f} deg", (820, 185), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                 
-                # GNSS (GPS)
+                # GNSS (GPS) (2Hz)
                 if gnss_data is not None:
                     cv2.putText(dashboard, f"GNSS Lat: {gnss_data['lat']:.6f}", (820, 215), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                     cv2.putText(dashboard, f"GNSS Lon: {gnss_data['lon']:.6f}", (820, 245), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                 
                 # 障害物の存在
                 if obstacle_vehicle and obstacle_vehicle.is_alive:
-                    cv2.putText(dashboard, "Obstacle (Tesla Model3) detected 12m ahead!", (820, 280), 
+                    cv2.putText(dashboard, "Obstacle (Tesla Model3) detected 10m ahead!", (820, 280), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                 
                 # 画面表示
