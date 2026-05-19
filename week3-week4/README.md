@@ -1,6 +1,8 @@
-# CARLA Connection and Execution Guide (For PID Controller Tuning)
+# CARLA Connection, Execution, and Multi-Sensor Guide
 
-This document provides instructions for connecting, running, and tuning the vehicle's PID controllers in the CARLA simulator using the scripts in this directory. All AI dependencies (such as PyTorch or CUDA) have been removed from this control loop to ensure it runs lightweight on any development PC.
+This document provides instructions for connecting, running, and tuning the vehicle's PID controllers in the CARLA simulator, as well as accessing raw sensor outputs (RGB camera, Semantic Segmentation camera, LiDAR, Radar, IMU, and GNSS).
+
+All heavier deep learning libraries (like PyTorch or CUDA) have been removed, enabling the scripts in this directory to run lightweight on any development PC.
 
 ---
 
@@ -21,18 +23,16 @@ pip install carla==0.9.15
 
 ## 2. Starting the CARLA Simulator Server
 
-Before running the Python scripts, you must launch the CARLA simulator itself. To improve performance and reduce GPU load, it is recommended to launch CARLA in low-quality mode.
+Before running the Python scripts, launch the CARLA simulator itself. It is recommended to launch CARLA in low-quality mode to reduce GPU overhead.
 
 - **For Windows**:
     ```bash
     CarlaUE4.exe -quality-level=Low
     ```
 
-Once the simulator window opens and the map loaded, the server is ready.
-
 ---
 
-## 3. Running the Control Loop & Tuning Parameters
+## 3. Running the Control Loop & Multi-Sensor Dashboard
 
 Open a separate terminal, navigate to this `week3-week4` folder, and execute the integration script. You can specify the CARLA server host, port, and custom PID gains directly as command-line arguments.
 
@@ -40,6 +40,13 @@ Open a separate terminal, navigate to this `week3-week4` folder, and execute the
 ```bash
 python carla_integration_demo.py
 ```
+Upon running, the script will:
+1. Spawn the Ego vehicle (Tesla Model 3).
+2. Spawn a static obstacle vehicle (Tesla Model 3) 12 meters ahead.
+3. Attach and configure 6 sensors: **RGB Camera, Semantic Segmentation Camera, LiDAR, Radar, IMU, and GNSS**.
+4. Open a dual OpenCV window displaying:
+   - **Left**: Raw RGB camera feed + PID control telemetry (Speed, CTE, steer/pedal commands).
+   - **Right**: Color-coded semantic segmentation feed + live numerical sensor readouts (LiDAR point counts, Radar detections, IMU acceleration/compass, GNSS coordinates).
 
 ### Remote Connection
 If you are running the CARLA simulator on a different machine on the local network:
@@ -58,19 +65,19 @@ python carla_integration_demo.py --kp-lat 0.25 --kd-lat 0.35 --kp-lon 1.5 --kd-l
 
 ## 4. Evaluation and Results
 
-Press **`Ctrl+C`** in the terminal to stop the simulation. The script will safely clean up the spawned vehicle and save the following analysis files in this directory:
+Press **`Ctrl+C`** in the terminal to stop the simulation. The script will safely destroy all spawned actors (including the ego and obstacle vehicles) and save the following analysis files in this directory:
 
 1. **`carla_pid_tuning_results.png`**: A 4-panel telemetry plot showing speed tracking, cross-track error (lateral error), steering command, and pedal control inputs.
-2. **`carla_run_recording.avi`**: A video recording of the run from the vehicle's roof camera, showing overlaid real-time telemetry (Speed, CTE, Steer).
+2. **`carla_run_recording.avi`**: A video recording of the dual-view dashboard, capturing the camera streams, segmentation, and live telemetry.
 
 ---
 
 ## 5. Offline Preliminary Simulator (Optional)
 
-If you want to run a quick test or study the PID tuning on a simplified mathematical vehicle model without launching CARLA, run:
+If you want to run a quick test or study the PID tuning on a simplified mathematical vehicle model (Kinematic Bicycle Model) without launching CARLA, run:
 ```bash
 python pid_experiment.py
 ```
-This runs an offline simulation of a Kinematic Bicycle Model tracking a curved path, generating:
+This runs an offline simulation of a vehicle tracking a curved path, generating:
 - **`pid_tuning_results.png`**: State comparisons of Tuned, Oscillating, and Sluggish parameters.
 - **`pid_simulation.gif`**: An animated visualization of the three vehicle configurations running the path.

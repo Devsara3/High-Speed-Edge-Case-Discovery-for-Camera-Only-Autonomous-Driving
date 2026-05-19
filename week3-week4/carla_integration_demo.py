@@ -2,10 +2,10 @@
 """
 CARLA Integration Demo (統合メインループ & 制御チューニング用スクリプト)
 
-このスクリプトは、Gitリポジトリをクローンした開発者が、
-自身のPC環境でCARLAサーバーに接続し、純粋なPID制御（速度・ステアリング）の
-挙動確認およびパラメータ調整（チューニング）を行うためのプログラムです。
-※ AI関連の重いライブラリ（PyTorch等）の依存関係は一切ありません。
+このスクリプトは、Gitリポジトリをクローンした開発チームメンバーが、
+自身のPC環境でCARLAに接続し、PID制御（車線追従・速度制御）と、
+車両に取り付けられた各種センサー（RGBカメラ、セマンティックカメラ、LiDAR、Radar、IMU、GNSS）の
+生データを可視化・分析するための統合環境プログラムです。
 """
 
 import time
@@ -35,7 +35,7 @@ except ImportError:
     sys.exit(1)
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="CARLA Pure PID Control & Tuning Script")
+    parser = argparse.ArgumentParser(description="CARLA Autonomous Control & Sensor Suite Demo")
     
     # CARLA接続設定
     parser.add_argument('--host', type=str, default='localhost', help='CARLA Server IP Address (Default: localhost)')
@@ -63,7 +63,7 @@ def main():
     args = parse_arguments()
     
     print("====================================================")
-    print(" CARLA PID Autonomous Driving Control System")
+    print(" CARLA PID Control & Sensor Suite Integration System")
     print(f" Connecting to Server: {args.host}:{args.port}")
     print(f" Target Speed: {args.target_speed} m/s")
     print(f" Lon PID (Speed): Kp={args.kp_lon}, Ki={args.ki_lon}, Kd={args.kd_lon}")
@@ -91,6 +91,7 @@ def main():
     world.apply_settings(settings)
     
     vehicle = None
+    obstacle_vehicle = None
     sensor_manager = None
     video_writer = None
     
@@ -105,36 +106,68 @@ def main():
     log_heading_err = []
     
     try:
-        # --- [車両とセンサーのスポーン] ---
+        # --- [車両と障害物のスポーン] ---
         blueprint_library = world.get_blueprint_library()
-        vehicle_bp = blueprint_library.filter('model3')[0]  # Tesla Model 3
-        spawn_points = world.get_map().get_spawn_points()
         
-        # 最初のスポーンポイントを選択
+        # 1. Ego車両のスポーン (Tesla Model 3)
+        vehicle_bp = blueprint_library.filter('model3')[0]
+        spawn_points = world.get_map().get_spawn_points()
         spawn_point = spawn_points[0]
         vehicle = world.spawn_actor(vehicle_bp, spawn_point)
-        print("Vehicle spawned successfully.")
+        print(f"Ego Vehicle spawned successfully (ID: {vehicle.id}).")
+        
+        # 2. 静的障害物車両のスポーン (前方12mの位置にTesla Model 3を配置: Tutorial Step 5)
+        obstacle_bp = blueprint_library.find('vehicle.tesla.model3')
+        ego_tf = vehicle.get_transform()
+        forward_vector = ego_tf.get_forward_vector()
+        obs_location = ego_tf.location + forward_vector * 12.0
+        obs_rotation = ego_tf.rotation
+        obstacle_transform = carla.Transform(obs_location, obs_rotation)
+        
+        obstacle_vehicle = world.try_spawn_actor(obstacle_bp, obstacle_transform)
+        if obstacle_vehicle:
+            print(f"Obstacle Vehicle spawned successfully 12m ahead (ID: {obstacle_vehicle.id}).")
+            obstacle_vehicle.set_autopilot(False)  # 障害物なので自動運転はOFF（静止状態）
+        else:
+            print("【警告】障害物車両のスポーンに失敗しました（スポーン位置競合の可能性があります）")
         
         # モジュール初期化
         sensor_manager = CarlaSensorManager(world, vehicle)
         planner = CarlaWaypointPlanner(world, vehicle)
         
-        # コントローラー初期化（引数からゲインを設定）
+        # コントローラー初期化
         controller = CarlaPIDController(vehicle, dt=0.05)
         controller.lon_kp, controller.lon_ki, controller.lon_kd = args.kp_lon, args.ki_lon, args.kd_lon
         controller.lat_kp, controller.lat_ki, controller.lat_kd = args.kp_lat, args.ki_lat, args.kd_lat
         
-        # フロントカメラ（RGB）の設置
-        camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))  # ルーフ前部
-        sensor_manager.spawn_rgb_camera(camera_transform, role_name='rgb_front')
+        # --- [各種センサーの設置 (Tutorial Step 4)] ---
+        # 1. RGBカメラ & セマンティック・セグメンテーション・カメラ（フロントガラス高さに設置）
+        cam_transform = carla.Transform(carla.Location(x=1.5, z=1.7), carla.Rotation(pitch=-10.0))
+        sensor_manager.spawn_rgb_camera(cam_transform, role_name='rgb_front')
+        sensor_manager.spawn_semantic_segmentation_camera(cam_transform, role_name='seg_front')
         
-        print("Starting Autonomous Loop... (Press Ctrl+C to stop)")
+        # 2. LiDAR（ルーフ中央）
+        lidar_transform = carla.Transform(carla.Location(x=0.0, z=2.5))
+        sensor_manager.spawn_lidar(lidar_transform, role_name='lidar')
         
-        # カメラセンサーが画像を流し始めるまで数フレーム同期クロックを進める
-        for _ in range(10):
+        # 3. Radar（フロントバンパー）
+        radar_transform = carla.Transform(carla.Location(x=2.0, z=0.5))
+        sensor_manager.spawn_radar(radar_transform, role_name='radar')
+        
+        # 4. IMU（車体中心）
+        imu_transform = carla.Transform(carla.Location(x=0.0, z=0.0))
+        sensor_manager.spawn_imu(imu_transform, role_name='imu')
+        
+        # 5. GNSS (GPS)（ルーフ中央）
+        gnss_transform = carla.Transform(carla.Location(x=0.0, z=2.5))
+        sensor_manager.spawn_gnss(gnss_transform, role_name='gnss')
+        
+        print("All sensors initialized. Starting autonomous loop... (Press Ctrl+C to stop)")
+        
+        # センサーがデータを流し始めるまで同期クロックを進める
+        for _ in range(15):
             world.tick()
             
-        start_time = time.time()
         step_count = 0
         
         # ====== メイン制御ループ ======
@@ -155,14 +188,13 @@ def main():
             steering_error = planner.calculate_steering_error(target_wp)
             target_speed = args.target_speed
             
-            # 評価用の正確なSigned Cross-Track Error (CTE) の算出
+            # Signed Cross-Track Error (CTE) の算出
             vehicle_transform = vehicle.get_transform()
             vehicle_loc = vehicle_transform.location
             carla_map = world.get_map()
             current_wp = carla_map.get_waypoint(vehicle_loc)
             wp_transform = current_wp.transform
             
-            # 最寄り車線中心からのズレベクトルと右ベクトルの内積で符号付き横ズレ量(CTE)を算出
             vec_wp_to_car = vehicle_loc - wp_transform.location
             right_vec = wp_transform.get_right_vector()
             cte = vec_wp_to_car.x * right_vec.x + vec_wp_to_car.y * right_vec.y + vec_wp_to_car.z * right_vec.z
@@ -174,35 +206,85 @@ def main():
             vehicle.apply_control(control_cmd)
             
             # ---------------------------------------------------------
-            # 3. Visualization (描画) : カメラ画像とテレメトリの表示
+            # 3. Sensor Data Reading & Dashboard (可視化: Tutorial Step 6 & 7)
             # ---------------------------------------------------------
             img_rgb = sensor_manager.get_image('rgb_front')
-            if img_rgb is not None:
+            img_seg = sensor_manager.get_image('seg_front')
+            lidar_data = sensor_manager.get_sensor_data('lidar')
+            radar_data = sensor_manager.get_sensor_data('radar')
+            imu_data = sensor_manager.get_sensor_data('imu')
+            gnss_data = sensor_manager.get_sensor_data('gnss')
+            
+            if img_rgb is not None and img_seg is not None:
                 img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                seg_bgr = cv2.cvtColor(img_seg, cv2.COLOR_RGB2BGR)
                 
-                # 画面上にリアルタイムのテレメトリ情報をオーバーレイ
-                cv2.putText(img_bgr, f"Speed: {speed_ms*3.6:.1f} km/h (Target: {target_speed*3.6:.1f})", (20, 40), 
+                # RGB画像とセマンティックセグメンテーション画像を並べてダッシュボード化
+                dashboard = np.hstack((img_bgr, seg_bgr))
+                
+                # --- 左画面(RGB)へのPID制御情報オーバーレイ ---
+                cv2.putText(dashboard, "1. Front RGB Camera & PID Control", (20, 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                cv2.putText(img_bgr, f"Cross-Track Error (CTE): {cte:.2f} m", (20, 80), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                cv2.putText(img_bgr, f"Steer Cmd: {control_cmd.steer:.2f}", (20, 120), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                cv2.putText(img_bgr, f"Throttle: {control_cmd.throttle:.2f} | Brake: {control_cmd.brake:.2f}", (20, 160), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(dashboard, f"Speed: {speed_ms*3.6:.1f} km/h (Target: {target_speed*3.6:.1f})", (20, 65), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                cv2.putText(dashboard, f"CTE: {cte:.2f} m | Yaw Err: {steering_error:.2f} rad", (20, 95), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                cv2.putText(dashboard, f"Steer Cmd: {control_cmd.steer:.2f}", (20, 125), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                cv2.putText(dashboard, f"Throttle: {control_cmd.throttle:.2f} | Brake: {control_cmd.brake:.2f}", (20, 155), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
                 
-                cv2.imshow("CARLA PID Tracking Control", img_bgr)
+                # --- 右画面(Seg)への各種センサー情報オーバーレイ (Tutorial Step 6) ---
+                cv2.putText(dashboard, "2. Semantic Cam & Sensor Suite", (820, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                
+                # LiDAR点群数
+                lidar_count = len(lidar_data) if lidar_data is not None else 0
+                cv2.putText(dashboard, f"LiDAR Points: {lidar_count} pts", (820, 65), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                
+                # Radar検知点数
+                radar_count = len(radar_data) if radar_data is not None else 0
+                cv2.putText(dashboard, f"Radar Detections: {radar_count}", (820, 95), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                
+                # IMUデータ
+                if imu_data is not None:
+                    ax, ay, az = imu_data['accel']
+                    gx, gy, gz = imu_data['gyro']
+                    cv2.putText(dashboard, f"IMU Accel: [{ax:.2f}, {ay:.2f}, {az:.2f}] m/s^2", (820, 125), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                    cv2.putText(dashboard, f"IMU Gyro:  [{gx:.2f}, {gy:.2f}, {gz:.2f}] rad/s", (820, 155), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                    cv2.putText(dashboard, f"Compass Heading: {math.degrees(imu_data['compass']):.1f} deg", (820, 185), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                
+                # GNSS (GPS)
+                if gnss_data is not None:
+                    cv2.putText(dashboard, f"GNSS Lat: {gnss_data['lat']:.6f}", (820, 215), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                    cv2.putText(dashboard, f"GNSS Lon: {gnss_data['lon']:.6f}", (820, 245), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                
+                # 障害物の存在
+                if obstacle_vehicle and obstacle_vehicle.is_alive:
+                    cv2.putText(dashboard, "Obstacle (Tesla Model3) detected 12m ahead!", (820, 280), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                
+                # 画面表示
+                cv2.imshow("CARLA PID Control & Multi-Sensor Dashboard", dashboard)
                 cv2.waitKey(1)
                 
                 # 録画ライターの初期化（初回のみ）
                 if not args.no_record and video_writer is None:
-                    h, w, _ = img_bgr.shape
+                    h, w, _ = dashboard.shape
                     out_path = os.path.join(os.path.dirname(__file__), "carla_run_recording.avi")
                     fourcc = cv2.VideoWriter_fourcc(*'XVID')
                     video_writer = cv2.VideoWriter(out_path, fourcc, 20.0, (w, h))
                     print(f"Video recording started: {out_path}")
                 
                 if video_writer is not None:
-                    video_writer.write(img_bgr)
+                    video_writer.write(dashboard)
             
             # ---------------------------------------------------------
             # 4. Data Logging (ログ記録)
@@ -279,6 +361,13 @@ def main():
         if vehicle:
             try:
                 vehicle.destroy()
+                print("Ego vehicle destroyed.")
+            except Exception:
+                pass
+        if obstacle_vehicle:
+            try:
+                obstacle_vehicle.destroy()
+                print("Obstacle vehicle destroyed.")
             except Exception:
                 pass
                 
