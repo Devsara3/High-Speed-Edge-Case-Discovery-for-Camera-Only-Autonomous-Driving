@@ -104,6 +104,16 @@ def main():
     log_cte = []
     log_heading_err = []
     
+    # センサー可視化用のデータログ
+    log_imu_t = []
+    log_imu_accel = []  # [(ax, ay, az), ...]
+    log_gnss_t = []
+    log_gnss_coords = []  # [(lat, lon), ...]
+    
+    # 最新の点群データを保持（最終フレームの可視化用）
+    latest_lidar_points = None
+    latest_radar_points = None
+    
     try:
         # --- [車両と障害物のスポーン] ---
         blueprint_library = world.get_blueprint_library()
@@ -220,10 +230,26 @@ def main():
             imu_data = sensor_manager.get_sensor_data('imu')
             gnss_data = sensor_manager.get_sensor_data('gnss')
             
+            # LiDAR/Radarの最新フレームデータを更新
+            if lidar_data is not None:
+                latest_lidar_points = lidar_data
+            if radar_data is not None:
+                latest_radar_points = radar_data
+                
+            # IMUの加速度ログ（20Hz程度）
+            if imu_data is not None:
+                log_imu_t.append(t_sim)
+                log_imu_accel.append(imu_data['accel'])
+                
+            # GNSSの座標ログ (2Hz程度)
+            if gnss_data is not None:
+                log_gnss_t.append(t_sim)
+                log_gnss_coords.append((gnss_data['lat'], gnss_data['lon']))
+            
             if img_rgb is not None and img_seg is not None:
                 # 画面縮小表示（1280x720 2台並びだと2560x720になり画面からはみ出る可能性があるため、ダッシュボード用に800x450にリサイズ）
-                img_resized = cv2.resize(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR), (800, 450))
-                seg_resized = cv2.resize(cv2.cvtColor(img_seg, cv2.COLOR_RGB2BGR), (800, 450))
+                img_resized = cv2.resize(cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2BGR), (800, 450))
+                seg_resized = cv2.resize(cv2.cvtColor(img_seg, cv2.COLOR_BGRA2BGR), (800, 450))
                 
                 # ダッシュボードの結合 (1600x450)
                 dashboard = np.hstack((img_resized, seg_resized))
@@ -359,6 +385,83 @@ def main():
             plt.savefig(plot_path, dpi=150)
             plt.close()
             print(f"Tuning results graph saved: {plot_path}")
+            
+            # (5) センサーデータの可視化プロット生成と保存 (Tutorial Step 7)
+            print("Generating multi-sensor analysis plots (LiDAR, Radar, IMU, GNSS)...")
+            fig_sensor, axs_sensor = plt.subplots(2, 2, figsize=(16, 12))
+            
+            # 5.1 LiDAR XY平面 2D散布図 (高さ Z で色分け)
+            if latest_lidar_points is not None and len(latest_lidar_points) > 0:
+                lx = latest_lidar_points[:, 0]
+                ly = latest_lidar_points[:, 1]
+                lz = latest_lidar_points[:, 2]
+                sc1 = axs_sensor[0, 0].scatter(lx, ly, c=lz, cmap='viridis', s=2, alpha=0.8)
+                axs_sensor[0, 0].set_title("LiDAR 2D Top-down View (colored by Height Z)")
+                axs_sensor[0, 0].set_xlabel("X (meters)")
+                axs_sensor[0, 0].set_ylabel("Y (meters)")
+                axs_sensor[0, 0].axis('equal')
+                fig_sensor.colorbar(sc1, ax=axs_sensor[0, 0], label='Height Z (meters)')
+                axs_sensor[0, 0].grid(True)
+            else:
+                axs_sensor[0, 0].text(0.5, 0.5, "No LiDAR Data", ha='center', va='center')
+                axs_sensor[0, 0].set_title("LiDAR 2D Top-down View")
+                
+            # 5.2 レーダーデータ (極座標からデカルト座標に変換、相対速度で色分け)
+            if latest_radar_points is not None and len(latest_radar_points) > 0:
+                # [velocity, azimuth, altitude, depth]
+                velocities = latest_radar_points[:, 0]
+                azimuths = latest_radar_points[:, 1]
+                altitudes = latest_radar_points[:, 2]
+                depths = latest_radar_points[:, 3]
+                
+                # 極座標からデカルト座標 (X, Y, Z) への変換
+                rx = depths * np.cos(altitudes) * np.cos(azimuths)
+                ry = depths * np.cos(altitudes) * np.sin(azimuths)
+                
+                sc2 = axs_sensor[0, 1].scatter(rx, ry, c=velocities, cmap='coolwarm', s=30, edgecolor='black', alpha=0.9)
+                axs_sensor[0, 1].set_title("Radar Detections (colored by Relative Velocity)")
+                axs_sensor[0, 1].set_xlabel("X (meters)")
+                axs_sensor[0, 1].set_ylabel("Y (meters)")
+                axs_sensor[0, 1].axis('equal')
+                fig_sensor.colorbar(sc2, ax=axs_sensor[0, 1], label='Relative Velocity (m/s)')
+                axs_sensor[0, 1].grid(True)
+            else:
+                axs_sensor[0, 1].text(0.5, 0.5, "No Radar Data", ha='center', va='center')
+                axs_sensor[0, 1].set_title("Radar Detections")
+                
+            # 5.3 IMU加速度の時系列折れ線グラフ
+            if len(log_imu_accel) > 0:
+                imu_accel_arr = np.array(log_imu_accel)
+                axs_sensor[1, 0].plot(log_imu_t, imu_accel_arr[:, 0], 'r-', label='Accel X')
+                axs_sensor[1, 0].plot(log_imu_t, imu_accel_arr[:, 1], 'g-', label='Accel Y')
+                axs_sensor[1, 0].plot(log_imu_t, imu_accel_arr[:, 2], 'b-', label='Accel Z')
+                axs_sensor[1, 0].set_title("IMU Accelerometer Time-Series")
+                axs_sensor[1, 0].set_xlabel("Time (seconds)")
+                axs_sensor[1, 0].set_ylabel("Acceleration (m/s^2)")
+                axs_sensor[1, 0].legend()
+                axs_sensor[1, 0].grid(True)
+            else:
+                axs_sensor[1, 0].text(0.5, 0.5, "No IMU Data", ha='center', va='center')
+                axs_sensor[1, 0].set_title("IMU Accelerometer Time-Series")
+                
+            # 5.4 GNSS (GPS) 走行経路の散布図
+            if len(log_gnss_coords) > 0:
+                gnss_arr = np.array(log_gnss_coords)
+                sc4 = axs_sensor[1, 1].scatter(gnss_arr[:, 1], gnss_arr[:, 0], c=log_gnss_t, cmap='plasma', s=15, alpha=0.9)
+                axs_sensor[1, 1].set_title("GNSS GPS Route Tracking")
+                axs_sensor[1, 1].set_xlabel("Longitude (deg)")
+                axs_sensor[1, 1].set_ylabel("Latitude (deg)")
+                fig_sensor.colorbar(sc4, ax=axs_sensor[1, 1], label='Time (seconds)')
+                axs_sensor[1, 1].grid(True)
+            else:
+                axs_sensor[1, 1].text(0.5, 0.5, "No GNSS Data", ha='center', va='center')
+                axs_sensor[1, 1].set_title("GNSS GPS Route Tracking")
+                
+            plt.tight_layout()
+            sensor_plot_path = os.path.join(os.path.dirname(__file__), "carla_sensor_analysis.png")
+            plt.savefig(sensor_plot_path, dpi=150)
+            plt.close()
+            print(f"Multi-sensor analysis graph saved: {sensor_plot_path}")
             
         # --- [クリーンアップ処理] ---
         print("Restoring CARLA simulator settings & destroying spawned actors...")

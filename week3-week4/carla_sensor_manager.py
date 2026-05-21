@@ -111,7 +111,7 @@ class CarlaSensorManager:
         # チュートリアルと同一の設定
         gnss_bp.set_attribute('sensor_tick', '0.5')               # 2Hz (0.5秒間隔)
         
-        gnss = self.world.spawn_actor(gnss_bp, gnss_transform, attach_to=self.vehicle)
+        gnss = self.world.spawn_actor(gnss_bp, transform, attach_to=self.vehicle)
         self.sensors.append(gnss)
         
         weak_self = weakref.ref(self)
@@ -140,9 +140,7 @@ class CarlaSensorManager:
         if not self:
             return
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-        array = np.reshape(array, (image.height, image.width, 4))
-        array = array[:, :, :3] # BGR
-        array = array[:, :, ::-1] # RGB
+        array = np.reshape(array, (image.height, image.width, 4)) # Keep as BGRA format
         
         self.image_data[role_name] = np.copy(array)
         self.sensor_data[role_name] = np.copy(array)
@@ -154,9 +152,7 @@ class CarlaSensorManager:
             return
         image.convert(carla.ColorConverter.CityScapesPalette)
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-        array = np.reshape(array, (image.height, image.width, 4))
-        array = array[:, :, :3] # BGR
-        array = array[:, :, ::-1] # RGB
+        array = np.reshape(array, (image.height, image.width, 4)) # Keep as BGRA format
         
         self.sensor_data[role_name] = np.copy(array)
 
