@@ -4,6 +4,7 @@ CARLA Real-World Optuna Optimizer
 単眼3D物体検出（YOLO3D/v8）のエッジケース（知覚リスクが最小＝AIの見落とし・危険性の過小評価）を高速探索する本番用パイプライン。
 """
 
+import argparse
 import carla
 import optuna
 import numpy as np
@@ -66,8 +67,8 @@ class RealCarlaEnv:
             self.actors.append(self.ego_vehicle)
             print(f"Ego vehicle (Tesla Model 3) spawned at {ego_transform.location}")
 
-            # 2. 相手車 (Target Vehicle: 大型トラック等、車種係数高め) を30メートル前方に配置
-            target_bp = self.blueprint_library.filter('carlacola')[0] # トラック
+            # 2. 相手車 (Target Vehicle: 大型トラック) を30メートル前方に配置
+            target_bp = self.blueprint_library.filter('carlacola')[0]
             forward_vector = ego_transform.get_forward_vector()
             target_location = ego_transform.location + forward_vector * 30.0
             target_location.z += 0.5
@@ -76,6 +77,9 @@ class RealCarlaEnv:
             self.target_vehicle = self.world.spawn_actor(target_bp, target_transform)
             self.actors.append(self.target_vehicle)
             print(f"Target vehicle (Truck) spawned at {target_location}")
+
+            # 旁观者视角：从高处俯瞰，同时看到两辆车
+            self._update_spectator()
 
             # 3. フロントガラス上部にRGBカメラを取り付ける
             camera_bp = self.blueprint_library.find('sensor.camera.rgb')
@@ -106,6 +110,25 @@ class RealCarlaEnv:
         except Exception as e:
             self.destroy()
             raise e
+
+    def _update_spectator(self):
+        """
+        更新CARLA客户端旁观者视角，使其从后方高处俯瞰两辆车。
+        """
+        if self.ego_vehicle is None or self.target_vehicle is None:
+            return
+        ego_loc = self.ego_vehicle.get_location()
+        target_loc = self.target_vehicle.get_location()
+        # 旁观者放在自车后方上方
+        spectator_location = carla.Location(
+            x=ego_loc.x - 15.0,
+            y=ego_loc.y,
+            z=ego_loc.z + 8.0
+        )
+        spectator_rotation = carla.Rotation(pitch=-15.0, yaw=0.0, roll=0.0)
+        self.world.get_spectator().set_transform(
+            carla.Transform(spectator_location, spectator_rotation)
+        )
 
     def set_weather(self, sun_altitude_angle, precipitation, fog_density):
         """
@@ -158,7 +181,7 @@ class RealCarlaEnv:
             'ego_vel': [ego_vel.x, ego_vel.y, ego_vel.z],
             'target_pos': [target_loc.x, target_loc.y, target_loc.z],
             'target_vel': [target_vel.x, target_vel.y, target_vel.z],
-            'target_class': 'truck' # スポーンした車種に合わせる
+            'target_class': 'truck'
         }
 
     def reset_actors_physics(self):
@@ -170,7 +193,8 @@ class RealCarlaEnv:
         ego_transform = spawn_points[0]
         ego_transform.location.z += 0.5
         self.ego_vehicle.set_transform(ego_transform)
-        self.ego_vehicle.set_target_velocity(carla.Vector3D(x=15.0, y=0.0, z=0.0)) # 15 m/s (~54 km/h)で前進
+        fwd = ego_transform.get_forward_vector()
+        self.ego_vehicle.set_target_velocity(carla.Vector3D(x=fwd.x * 15.0, y=fwd.y * 15.0, z=fwd.z * 15.0))  # 15 m/s, 沿车辆正前方
         
         # 相手車の再配置 (自車の30m前方で停止状態に固定)
         forward_vector = ego_transform.get_forward_vector()
@@ -190,6 +214,10 @@ class RealCarlaEnv:
                 self.image_queue.get_nowait()
             except queue.Empty:
                 break
+        
+        # 旁观者视角也同步更新
+        self._update_spectator()
+        self.last_image = None
 
     def destroy(self):
         """
@@ -324,17 +352,22 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
     return study
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CARLA + Optuna edge-case search")
+    parser.add_argument("--trials", type=int, default=30, help="Number of Optuna trials (default: 30)")
+    parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random"],
+                        help="Sampler: TPE or Random (default: TPE)")
+    args = parser.parse_args()
+
     print("====================================================")
     print("  CARLA Live Optuna Edge-Case Discovery Pipeline")
+    print(f"  Trials: {args.trials}, Sampler: {args.sampler}")
     print("====================================================")
     
-    # 接続確認用の例外ハンドリング付き実行
     try:
-        # TPE (ベイズ最適化) による本番探索
-        study_tpe = run_real_carla_optimization(n_trials=30, sampler_name='TPE')
-        print("\nTPE Optimization complete!")
-        print(f"Worst Edge Case (Illusion of Safety) Perception Gap: {study_tpe.best_trial.value:.4f}")
-        print(f"Weather parameters: {study_tpe.best_trial.params}")
+        study = run_real_carla_optimization(n_trials=args.trials, sampler_name=args.sampler)
+        print(f"\n{args.sampler} Optimization complete!")
+        print(f"Worst Edge Case (Illusion of Safety) Perceived Risk: {study.best_trial.value:.4f}")
+        print(f"Weather parameters: {study.best_trial.params}")
         
     except Exception as e:
         print(f"\nFailed to execute pipeline: {e}")
