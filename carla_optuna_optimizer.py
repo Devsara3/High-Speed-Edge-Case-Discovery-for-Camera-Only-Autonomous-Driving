@@ -10,6 +10,7 @@ import numpy as np
 import cv2
 import time
 import os
+import queue
 import pandas as pd
 from evaluator import YoloEvaluator
 from risk_calculator import RiskCalculator
@@ -30,7 +31,9 @@ class RealCarlaEnv:
         self.ego_vehicle = None
         self.target_vehicle = None
         self.camera = None
-        self.last_image = None
+        
+        # スレッドセーフな同期キューの初期化
+        self.image_queue = queue.Queue()
         
         # 元の設定をバックアップして同期モードを有効化
         self.original_settings = self.world.get_settings()
@@ -94,7 +97,8 @@ class RealCarlaEnv:
                 array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
                 array = np.reshape(array, (image.height, image.width, 4))
                 bgr_image = array[:, :, :3]
-                self.last_image = bgr_image
+                # 画像を同期キューに投入
+                self.image_queue.put(bgr_image)
 
             self.camera.listen(_on_camera_capture)
             print("Front Camera mounted and listen callback registered.")
@@ -126,16 +130,18 @@ class RealCarlaEnv:
         # 同期tickを実行してアクターの物理更新とカメラ撮影を進める
         self.world.tick()
         
-        # コールバックから画像が届くまで少し待機
-        timeout = 2.0
-        start_time = time.time()
-        while self.last_image is None:
-            time.sleep(0.01)
-            if time.time() - start_time > timeout:
-                print("Warning: Camera frame timeout. Returning dummy image.")
-                return np.zeros((720, 1280, 3), dtype=np.uint8)
+        try:
+            # 同期ワールドを進めた後、画像キューにデータが届くのを待つ (タイムアウト2.0秒)
+            bgr_image = self.image_queue.get(timeout=2.0)
+            
+            # キューに古いフレームが溜まっていたら破棄し、最新のものを取得する
+            while not self.image_queue.empty():
+                bgr_image = self.image_queue.get_nowait()
                 
-        return self.last_image
+            return bgr_image
+        except queue.Empty:
+            print("Warning: Camera frame queue timeout. Returning dummy image.")
+            return np.zeros((720, 1280, 3), dtype=np.uint8)
 
     def get_ground_truth(self):
         """
@@ -177,7 +183,13 @@ class RealCarlaEnv:
         # 物理エンジンを落ち着かせるために同期モードで数フレームTick
         for _ in range(5):
             self.world.tick()
-        self.last_image = None
+        
+        # キューをクリアして初期化
+        while not self.image_queue.empty():
+            try:
+                self.image_queue.get_nowait()
+            except queue.Empty:
+                break
 
     def destroy(self):
         """
@@ -214,10 +226,10 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
     else:
         sampler = optuna.samplers.TPESampler(seed=42)
         
-    study = optuna.create_study(direction="minimize", sampler=sampler)
+    study = optuna.create_study(direction="maximize", sampler=sampler)
     history = []
     
-    best_score_so_far = float('inf')
+    best_score_so_far = -float('inf')
     
     try:
         def objective(trial):
@@ -250,9 +262,6 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
             gt = env.get_ground_truth()
             
             # 知覚リスクの算出
-            # ※YOLOが雨や霧で見落とす（Z距離=無限大）と、知覚リスク R_perceived は 0 に近づきます。
-            # ※本研究では「本当は危険（GTが至近距離）なのに、AIが完全に安全だと誤認（R=0）している極限の脆弱性」を探索するため、
-            #   Optunaは R_perceived が『最小』になるパラメータを探索（minimize）します。
             r_perceived, debug_info = risk_calculator.calculate_risk(
                 ego_pos=gt['ego_pos'], ego_vel=gt['ego_vel'],
                 target_pos=gt['target_pos'], target_vel=gt['target_vel'],
@@ -260,15 +269,25 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
                 yolo_z_distance=min_z_dist
             )
             
-            score = r_perceived
+            # 真値（GT）に基づいた物理リスクの算出
+            r_gt, debug_info_gt = risk_calculator.calculate_risk(
+                ego_pos=gt['ego_pos'], ego_vel=gt['ego_vel'],
+                target_pos=gt['target_pos'], target_vel=gt['target_vel'],
+                target_class=gt['target_class'],
+                yolo_z_distance=debug_info['gt_distance']
+            )
             
-            # エッジケース（最も過小評価した最悪のケース）が更新された場合、結果画像を保存
-            if score < best_score_so_far:
+            # 知覚ギャップスコア（物理リスク - 知覚リスク）
+            score = r_gt - r_perceived
+            
+            # エッジケース（最も過小評価した＝乖離ギャップが最大のケース）が更新された場合、結果画像を保存
+            if score > best_score_so_far:
                 best_score_so_far = score
                 cv2.imwrite(f"results/real_edge_case_worst_{sampler_name}.jpg", annotated_img)
-                print(f"--> [NEW WORST EDGE CASE FOUND] Perceived Risk Score (Minimized): {score:.4f}")
+                print(f"--> [NEW WORST EDGE CASE FOUND] Perception Gap Score (Maximized): {score:.4f}")
                 print(f"    Params: Sun={sun_altitude_angle:.2f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}")
                 print(f"    YOLO Estimated Z: {min_z_dist:.2f}m (GT Distance: {debug_info['gt_distance']:.2f}m)")
+                print(f"    GT Risk: {r_gt:.4f}, Perceived Risk: {r_perceived:.4f}")
                 
             elapsed_time = time.time() - start_time
             
@@ -280,7 +299,9 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
                 "fog_density": fog_density,
                 "yolo_z_distance": min_z_dist,
                 "gt_distance": debug_info['gt_distance'],
+                "r_gt": r_gt,
                 "r_perceived": r_perceived,
+                "perception_gap": score,
                 "omega": debug_info['omega'],
                 "alpha": debug_info['alpha'],
                 "beta": debug_info['beta'],
@@ -312,7 +333,7 @@ if __name__ == "__main__":
         # TPE (ベイズ最適化) による本番探索
         study_tpe = run_real_carla_optimization(n_trials=30, sampler_name='TPE')
         print("\nTPE Optimization complete!")
-        print(f"Worst Edge Case (Illusion of Safety) Perceived Risk: {study_tpe.best_trial.value:.4f}")
+        print(f"Worst Edge Case (Illusion of Safety) Perception Gap: {study_tpe.best_trial.value:.4f}")
         print(f"Weather parameters: {study_tpe.best_trial.params}")
         
     except Exception as e:

@@ -56,6 +56,9 @@ def parse_arguments():
     # 記録の無効化オプション
     parser.add_argument('--no-record', action='store_true', help='Disable saving video and tuning plots upon exit')
     
+    # オートパイロットテスト（自動ブレーキ・衝突回避）オプション
+    parser.add_argument('--use-autopilot', action='store_true', help='Use CARLA Traffic Manager autopilot for Ego vehicle (tests collision avoidance / emergency braking)')
+    
     return parser.parse_args()
 
 def main():
@@ -125,20 +128,30 @@ def main():
         vehicle = world.spawn_actor(ego_bp, spawn_point)
         print(f"Ego Vehicle spawned successfully (Tesla Cybertruck, ID: {vehicle.id}).")
         
-        # 2. 静的障害物車両のスポーン (前方10mの位置にTesla Model 3を配置: Tutorial Step 5に準拠)
+        # 2. 静的障害物車両のスポーン (前方10m〜14mの位置にTesla Model 3を配置)
+        # クライアント-サーバー同期のタイミングバグを回避するため、新規アクターの get_transform() ではなく
+        # 既知の spawn_point から障害物のスポーン座標を計算します。
         obstacle_bp = blueprint_library.find('vehicle.tesla.model3')
-        ego_tf = vehicle.get_transform()
-        forward_vector = ego_tf.get_forward_vector()
-        obs_location = ego_tf.location + forward_vector * 10.0
-        obs_rotation = ego_tf.rotation
-        obstacle_transform = carla.Transform(obs_location, obs_rotation)
+        forward_vector = spawn_point.get_forward_vector()
         
-        obstacle_vehicle = world.try_spawn_actor(obstacle_bp, obstacle_transform)
-        if obstacle_vehicle:
-            print(f"Obstacle Vehicle spawned successfully 10m ahead (Tesla Model 3, ID: {obstacle_vehicle.id}).")
-            obstacle_vehicle.set_autopilot(False)  # 障害物なので静止
-        else:
-            print("【警告】障害物車両のスポーンに失敗しました（スポーン位置競合の可能性があります）")
+        obstacle_vehicle = None
+        # 道路やコリジョンとの競合によるスポーン失敗を防止するため、Z座標を少し浮かせ、
+        # 失敗した場合は距離を離して最大3回まで再試行します。
+        for attempt in range(3):
+            spawn_dist = 10.0 + attempt * 2.0
+            obs_location = spawn_point.location + forward_vector * spawn_dist
+            obs_location.z += 0.3  # コリジョン判定を避けるため地面から少し浮かせる
+            obstacle_transform = carla.Transform(obs_location, spawn_point.rotation)
+            
+            obstacle_vehicle = world.try_spawn_actor(obstacle_bp, obstacle_transform)
+            if obstacle_vehicle:
+                print(f"Obstacle Vehicle spawned successfully {spawn_dist}m ahead (Tesla Model 3, ID: {obstacle_vehicle.id}).")
+                obstacle_vehicle.set_autopilot(False)
+                # 物理的な接地フェーズで接地させてから固定するため、ここでは物理演算はONのままにします。
+                break
+        
+        if not obstacle_vehicle:
+            print("【警告】障害物車両のスポーンに失敗しました（初期位置の競合の可能性があります）")
         
         # モジュール初期化
         sensor_manager = CarlaSensorManager(world, vehicle)
@@ -148,6 +161,20 @@ def main():
         controller = CarlaPIDController(vehicle, dt=0.05)
         controller.lon_kp, controller.lon_ki, controller.lon_kd = args.kp_lon, args.ki_lon, args.kd_lon
         controller.lat_kp, controller.lat_ki, controller.lat_kd = args.kp_lat, args.ki_lat, args.kd_lat
+        
+        # Ego車両の自動ブレーキ・衝突回避テスト用のオートパイロット切り替え
+        if args.use_autopilot:
+            print("Autopilot Test Mode: Enabling CARLA Traffic Manager for Ego Vehicle.")
+            vehicle.set_autopilot(True)
+            # トラフィックマネージャーのポート8000を取得して安全車間距離等を設定
+            traffic_manager = client.get_trafficmanager(8000)
+            traffic_manager.set_global_distance_to_leading_vehicle(4.0) # 安全車間距離を4.0mに設定
+            # 衝突回避が正しく機能するように信号無視等を設定（直進テストをしやすくするため）
+            traffic_manager.ignore_lights_percentage(vehicle, 100.0)
+            traffic_manager.ignore_signs_percentage(vehicle, 100.0)
+        else:
+            print("Manual PID Control Mode: Tuning control loop.")
+            vehicle.set_autopilot(False)
         
         # --- [各種センサーの設置 (Tutorial Step 4に完全準拠)] ---
         # 4.1 & 4.2 RGBカメラ & セマンティックカメラ（フロントガラス高さに設置）
@@ -179,11 +206,20 @@ def main():
         
         print("All sensors initialized. Starting autonomous loop... (Press Ctrl+C to stop)")
         
-        # センサーがデータを流し始めるまで同期クロックを進める
+        # センサーがデータを流し始めるまで同期クロックを進め、同時に物理的に路面に接地させる（初期接地フェーズ）
+        print("Settle phase: Letting vehicles settle on the road surface...")
         for _ in range(15):
+            # 自車は手動ブレーキで動かないように保持
+            vehicle.apply_control(carla.VehicleControl(hand_brake=True))
             world.tick()
             
+        # 障害物が接地した状態の座標で物理演算を無効化（固定）
+        if obstacle_vehicle:
+            obstacle_vehicle.set_simulate_physics(False)
+            print("Obstacle vehicle physics frozen on the road surface.")
+            
         step_count = 0
+        consecutive_stopped = 0
         
         # ====== メイン制御ループ ======
         while True:
@@ -215,14 +251,9 @@ def main():
             cte = vec_wp_to_car.x * right_vec.x + vec_wp_to_car.y * right_vec.y + vec_wp_to_car.z * right_vec.z
             
             # ---------------------------------------------------------
-            # 2. Control (制御) : PID指令値の計算と適用
+            # 2. Control (制御) : 指令値の計算と適用
             # ---------------------------------------------------------
-            control_cmd = controller.run_step(target_speed=target_speed, target_steering_angle=steering_error)
-            vehicle.apply_control(control_cmd)
-            
-            # ---------------------------------------------------------
-            # 3. Sensor Data Reading & Dashboard (可視化: Tutorial Step 6 & 7に準拠)
-            # ---------------------------------------------------------
+            # センサーデータの取得
             img_rgb = sensor_manager.get_image('rgb_front')
             img_seg = sensor_manager.get_image('seg_front')
             lidar_data = sensor_manager.get_sensor_data('lidar')
@@ -230,78 +261,135 @@ def main():
             imu_data = sensor_manager.get_sensor_data('imu')
             gnss_data = sensor_manager.get_sensor_data('gnss')
             
-            # LiDAR/Radarの最新フレームデータを更新
             if lidar_data is not None:
                 latest_lidar_points = lidar_data
             if radar_data is not None:
                 latest_radar_points = radar_data
                 
-            # IMUの加速度ログ（20Hz程度）
+            # レーダー追尾ターゲット処理
+            radar_closest_dist = 999.0
+            radar_closest_vel = 0.0
+            if latest_radar_points is not None and len(latest_radar_points) > 0:
+                closest_idx = np.argmin(latest_radar_points[:, 3])
+                radar_closest_dist = latest_radar_points[closest_idx, 3]
+                radar_closest_vel = latest_radar_points[closest_idx, 0]
+                
+            # IMU/GNSS テレメトリのログ
             if imu_data is not None:
                 log_imu_t.append(t_sim)
                 log_imu_accel.append(imu_data['accel'])
-                
-            # GNSSの座標ログ (2Hz程度)
             if gnss_data is not None:
                 log_gnss_t.append(t_sim)
                 log_gnss_coords.append((gnss_data['lat'], gnss_data['lon']))
-            
+                
+            # 制御指令値の決定と適用
+            if args.use_autopilot:
+                control_cmd = vehicle.get_control()
+            else:
+                control_cmd = controller.run_step(target_speed, steering_error)
+                vehicle.apply_control(control_cmd)
+                
+            # 障害物との距離とAEB自動停止判定
+            actual_dist = 999.0
+            if obstacle_vehicle and obstacle_vehicle.is_alive:
+                obs_loc = obstacle_vehicle.get_transform().location
+                actual_dist = vehicle_loc.distance(obs_loc)
+                speed_kmh = speed_ms * 3.6
+                
+                # 自動ブレーキで安全停止したか判定
+                if actual_dist < 10.0 and speed_kmh < 0.1:
+                    consecutive_stopped += 1
+                    if consecutive_stopped >= 15: # 15フレーム(約0.75秒)連続で停止
+                        print("\n[SUCCESS] Ego vehicle successfully stopped in front of the obstacle!")
+                        print(f"Final distance to obstacle: {actual_dist:.2f} meters.")
+                        break
+                else:
+                    consecutive_stopped = 0
+                
+                # 衝突判定
+                if actual_dist < 3.8:
+                    print("\n[COLLISION] Ego vehicle got too close or collided with the obstacle!")
+                    break
+                    
+            if step_count > 500: # 最大25秒でタイムアウト
+                print("\n[TIMEOUT] Simulation reached maximum duration.")
+                break
+
             if img_rgb is not None and img_seg is not None:
-                # 画面縮小表示（1280x720 2台並びだと2560x720になり画面からはみ出る可能性があるため、ダッシュボード用に800x450にリサイズ）
-                img_resized = cv2.resize(cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2BGR), (800, 450))
-                seg_resized = cv2.resize(cv2.cvtColor(img_seg, cv2.COLOR_BGRA2BGR), (800, 450))
+                # 画面縮小表示（1280x720 からダッシュボード用に480x270にリサイズして見切れ問題を解消）
+                img_resized = cv2.resize(cv2.cvtColor(img_rgb, cv2.COLOR_BGRA2BGR), (480, 270))
+                seg_resized = cv2.resize(cv2.cvtColor(img_seg, cv2.COLOR_BGRA2BGR), (480, 270))
                 
-                # ダッシュボードの結合 (1600x450)
-                dashboard = np.hstack((img_resized, seg_resized))
+                # 映像の上にタイトル・ラベルを控えめに描画
+                cv2.putText(img_resized, "EGO VEHICLE RGB VIEW", (15, 25), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+                cv2.putText(seg_resized, "SEMANTIC SEGMENTATION VIEW", (15, 25), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
                 
-                # --- 左画面(RGB)へのPID制御情報オーバーレイ ---
-                cv2.putText(dashboard, "1. Front RGB Camera (Cybertruck) & PID Control", (20, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-                cv2.putText(dashboard, f"Speed: {speed_ms*3.6:.1f} km/h (Target: {target_speed*3.6:.1f})", (20, 65), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.putText(dashboard, f"CTE: {cte:.2f} m | Yaw Err: {steering_error:.2f} rad", (20, 95), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.putText(dashboard, f"Steer Cmd: {control_cmd.steer:.2f}", (20, 125), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.putText(dashboard, f"Throttle: {control_cmd.throttle:.2f} | Brake: {control_cmd.brake:.2f}", (20, 155), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                # 左右の映像を横に結合 (960x270)
+                video_area = np.hstack((img_resized, seg_resized))
                 
-                # --- 右画面(Seg)への各種センサー情報オーバーレイ ---
-                cv2.putText(dashboard, "2. Semantic Camera & Sensor Suite (10Hz)", (820, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+                # 下部に 150px の HUD (情報表示領域) を結合するため、960x150 の黒背景を作成
+                hud_area = np.zeros((150, 960, 3), dtype=np.uint8)
                 
-                # LiDAR点群数
+                # HUDの列分割境界線を引く (3列構成)
+                cv2.line(hud_area, (0, 0), (960, 0), (80, 80, 80), 2)
+                cv2.line(hud_area, (310, 0), (310, 150), (80, 80, 80), 1)
+                cv2.line(hud_area, (610, 0), (610, 150), (80, 80, 80), 1)
+                
+                # 結合 (960x420)
+                dashboard = np.vstack((video_area, hud_area))
+                
+                # --- 第1列: Ego Vehicle Control Telemetry ---
+                cv2.putText(dashboard, "1. Ego Vehicle Telemetry", (15, 290), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+                speed_text = f"Speed: {speed_ms*3.6:.1f} km/h"
+                cv2.putText(dashboard, speed_text, (15, 315), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                target_text = f"Target Speed: {target_speed*3.6:.1f} km/h"
+                cv2.putText(dashboard, target_text, (15, 340), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                ap_text = f"Autopilot: {'ACTIVE' if args.use_autopilot else 'INACTIVE'}"
+                cv2.putText(dashboard, ap_text, (15, 365), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255) if args.use_autopilot else (150, 150, 150), 1, cv2.LINE_AA)
+                
+                # --- 第2列: Control Commands ---
+                cv2.putText(dashboard, "2. Control Commands", (325, 290), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
+                cv2.putText(dashboard, f"Steer Cmd: {control_cmd.steer:.2f}", (325, 315), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(dashboard, f"Throttle: {control_cmd.throttle:.2f} | Brake: {control_cmd.brake:.2f}", (325, 340), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(dashboard, f"CTE (Offset): {cte:.2f} m | Yaw Err: {steering_error:.2f} rad", (325, 365), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                
+                # --- 第3列: Multi-Sensor Perception ---
+                cv2.putText(dashboard, "3. Multi-Sensor Perception", (625, 290), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+                
+                radar_info = "No Target"
+                if radar_closest_dist < 100.0:
+                    radar_info = f"Dist: {radar_closest_dist:.1f}m, RelV: {radar_closest_vel:.1f}m/s"
+                cv2.putText(dashboard, f"Radar Closest: {radar_info}", (625, 315), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                
                 lidar_count = len(lidar_data) if lidar_data is not None else 0
-                cv2.putText(dashboard, f"LiDAR Points: {lidar_count} pts", (820, 65), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                
-                # Radar検知点数
                 radar_count = len(radar_data) if radar_data is not None else 0
-                cv2.putText(dashboard, f"Radar Detections: {radar_count}", (820, 95), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(dashboard, f"LiDAR: {lidar_count} pts | Radar: {radar_count} dets", (625, 340), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
                 
-                # IMUデータ (20Hz)
-                if imu_data is not None:
+                if imu_data is not None and gnss_data is not None:
                     ax, ay, az = imu_data['accel']
-                    gx, gy, gz = imu_data['gyro']
-                    cv2.putText(dashboard, f"IMU Accel: [{ax:.2f}, {ay:.2f}, {az:.2f}] m/s^2", (820, 125), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-                    cv2.putText(dashboard, f"IMU Gyro:  [{gx:.2f}, {gy:.2f}, {gz:.2f}] rad/s", (820, 155), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-                    cv2.putText(dashboard, f"Compass Heading: {math.degrees(imu_data['compass']):.1f} deg", (820, 185), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+                    cv2.putText(dashboard, f"IMU Accel: [{ax:.1f}, {ay:.1f}, {az:.1f}] | GPS Lat: {gnss_data['lat']:.5f}", (625, 365), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 200, 200), 1, cv2.LINE_AA)
+                    cv2.putText(dashboard, f"Compass: {math.degrees(imu_data['compass']):.1f} deg | GPS Lon: {gnss_data['lon']:.5f}", (625, 385), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 200, 200), 1, cv2.LINE_AA)
                 
-                # GNSS (GPS) (2Hz)
-                if gnss_data is not None:
-                    cv2.putText(dashboard, f"GNSS Lat: {gnss_data['lat']:.6f}", (820, 215), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-                    cv2.putText(dashboard, f"GNSS Lon: {gnss_data['lon']:.6f}", (820, 245), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-                
-                # 障害物の存在
+                # 障害物警告を中央に表示
                 if obstacle_vehicle and obstacle_vehicle.is_alive:
-                    cv2.putText(dashboard, "Obstacle (Tesla Model3) detected 10m ahead!", (820, 280), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    if actual_dist < 15.0:
+                        cv2.putText(dashboard, f"!!! COLLISION WARNING: {actual_dist:.1f}m !!!", (300, 250), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
                 
                 # 画面表示
                 cv2.imshow("CARLA PID Control & Multi-Sensor Dashboard", dashboard)
@@ -310,13 +398,14 @@ def main():
                 # 録画ライターの初期化（初回のみ）
                 if not args.no_record and video_writer is None:
                     h, w, _ = dashboard.shape
-                    out_path = os.path.join(os.path.dirname(__file__), "carla_run_recording.avi")
+                    pid_suffix = f"lon_{args.kp_lon}_{args.ki_lon}_{args.kd_lon}_lat_{args.kp_lat}_{args.ki_lat}_{args.kd_lat}"
+                    out_path = os.path.join(os.path.dirname(__file__), f"carla_run_PID_{pid_suffix}_recording.avi")
                     fourcc = cv2.VideoWriter_fourcc(*'XVID')
                     video_writer = cv2.VideoWriter(out_path, fourcc, 20.0, (w, h))
                     print(f"Video recording started: {out_path}")
                 
                 if video_writer is not None:
-                    video_writer.write(dashboard)
+                                        video_writer.write(dashboard)
             
             # ---------------------------------------------------------
             # 4. Data Logging (ログ記録)
@@ -381,7 +470,8 @@ def main():
             axs[1, 1].grid(True)
             
             plt.tight_layout()
-            plot_path = os.path.join(os.path.dirname(__file__), "carla_pid_tuning_results.png")
+            pid_suffix = f"lon_{args.kp_lon}_{args.ki_lon}_{args.kd_lon}_lat_{args.kp_lat}_{args.ki_lat}_{args.kd_lat}"
+            plot_path = os.path.join(os.path.dirname(__file__), f"carla_pid_tuning_{pid_suffix}_results.png")
             plt.savefig(plot_path, dpi=150)
             plt.close()
             print(f"Tuning results graph saved: {plot_path}")
@@ -458,7 +548,8 @@ def main():
                 axs_sensor[1, 1].set_title("GNSS GPS Route Tracking")
                 
             plt.tight_layout()
-            sensor_plot_path = os.path.join(os.path.dirname(__file__), "carla_sensor_analysis.png")
+            pid_suffix = f"lon_{args.kp_lon}_{args.ki_lon}_{args.kd_lon}_lat_{args.kp_lat}_{args.ki_lat}_{args.kd_lat}"
+            sensor_plot_path = os.path.join(os.path.dirname(__file__), f"carla_sensor_analysis_{pid_suffix}.png")
             plt.savefig(sensor_plot_path, dpi=150)
             plt.close()
             print(f"Multi-sensor analysis graph saved: {sensor_plot_path}")

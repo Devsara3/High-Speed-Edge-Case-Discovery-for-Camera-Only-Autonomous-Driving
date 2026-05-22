@@ -17,6 +17,15 @@ class YoloEvaluator:
         # 深層学習深度推定モデル (MiDaS) のロード試行 (実用的な単眼3D検出システムとして機能させます)
         try:
             import numpy as np # evaluator用に追加インポートを保証
+            import sys
+            import os
+            # 親ディレクトリの同階層にある carla_edge_case_search を sys.path に追加して week3 を読み込めるようにする
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            parent_dir = os.path.dirname(current_dir)
+            search_path = os.path.join(parent_dir, "carla_edge_case_search")
+            if os.path.exists(search_path) and search_path not in sys.path:
+                sys.path.append(search_path)
+            
             from week3.depth_estimation import MiDaS_DepthEstimator
             # 軽量なMiDaS_smallをロード
             self.depth_estimator = MiDaS_DepthEstimator(model_type="MiDaS_small")
@@ -76,7 +85,7 @@ class YoloEvaluator:
                             # メートル単位の物理的な3D距離(Z)に校正する (ゼロ割防止)
                             if median_disparity > 0:
                                 # ディープラーニングによる推定距離(Z)の算出
-                                z_dist = 1000.0 / median_disparity
+                                z_dist = 200.0 / median_disparity
                             else:
                                 z_dist = float('inf')
                         else:
