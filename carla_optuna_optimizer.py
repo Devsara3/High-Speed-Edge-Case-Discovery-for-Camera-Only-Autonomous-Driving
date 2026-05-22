@@ -4,6 +4,7 @@ CARLA Real-World Optuna Optimizer
 単眼3D物体検出（YOLO3D/v8）のエッジケース（知覚リスクが最小＝AIの見落とし・危険性の過小評価）を高速探索する本番用パイプライン。
 """
 
+import argparse
 import carla
 import optuna
 import numpy as np
@@ -63,8 +64,8 @@ class RealCarlaEnv:
             self.actors.append(self.ego_vehicle)
             print(f"Ego vehicle (Tesla Model 3) spawned at {ego_transform.location}")
 
-            # 2. 相手車 (Target Vehicle: 大型トラック等、車種係数高め) を30メートル前方に配置
-            target_bp = self.blueprint_library.filter('carlacola')[0] # トラック
+            # 2. 相手車 (Target Vehicle: 大型トラック) を30メートル前方に配置
+            target_bp = self.blueprint_library.filter('carlacola')[0]
             forward_vector = ego_transform.get_forward_vector()
             target_location = ego_transform.location + forward_vector * 30.0
             target_location.z += 0.5
@@ -152,7 +153,7 @@ class RealCarlaEnv:
             'ego_vel': [ego_vel.x, ego_vel.y, ego_vel.z],
             'target_pos': [target_loc.x, target_loc.y, target_loc.z],
             'target_vel': [target_vel.x, target_vel.y, target_vel.z],
-            'target_class': 'truck' # スポーンした車種に合わせる
+            'target_class': 'truck'
         }
 
     def reset_actors_physics(self):
@@ -303,17 +304,22 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
     return study
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CARLA + Optuna edge-case search")
+    parser.add_argument("--trials", type=int, default=30, help="Number of Optuna trials (default: 30)")
+    parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random"],
+                        help="Sampler: TPE or Random (default: TPE)")
+    args = parser.parse_args()
+
     print("====================================================")
     print("  CARLA Live Optuna Edge-Case Discovery Pipeline")
+    print(f"  Trials: {args.trials}, Sampler: {args.sampler}")
     print("====================================================")
     
-    # 接続確認用の例外ハンドリング付き実行
     try:
-        # TPE (ベイズ最適化) による本番探索
-        study_tpe = run_real_carla_optimization(n_trials=30, sampler_name='TPE')
-        print("\nTPE Optimization complete!")
-        print(f"Worst Edge Case (Illusion of Safety) Perceived Risk: {study_tpe.best_trial.value:.4f}")
-        print(f"Weather parameters: {study_tpe.best_trial.params}")
+        study = run_real_carla_optimization(n_trials=args.trials, sampler_name=args.sampler)
+        print(f"\n{args.sampler} Optimization complete!")
+        print(f"Worst Edge Case (Illusion of Safety) Perceived Risk: {study.best_trial.value:.4f}")
+        print(f"Weather parameters: {study.best_trial.params}")
         
     except Exception as e:
         print(f"\nFailed to execute pipeline: {e}")

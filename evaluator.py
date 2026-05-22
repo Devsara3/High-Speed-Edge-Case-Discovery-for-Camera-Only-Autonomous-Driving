@@ -35,7 +35,7 @@ class YoloEvaluator:
         :return: (最小のZ距離, 信頼度の合計) または (最小のZ距離, 信頼度の合計, 描画済み画像)
                  検出失敗時は Z距離は float('inf') となります。
         """
-        results = self.model(image, verbose=False)
+        results = self.model(image, verbose=False, conf=0.1)
         
         detected_count = 0
         total_confidence = 0.0
