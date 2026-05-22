@@ -45,18 +45,18 @@ class CarlaWaypointPlanner:
             # 回避（よける）制御の適用判定：前方25mから通過後15mまで
             offset_val = 0.0
             if 0.0 <= long_dist <= 25.0:
-                # 障害物が前方25m以内にあるとき、左側へ3.5m（1車線分）回避する
+                # 障害物が前方25m以内にあるとき、右側へ3.5m（1車線分）回避する
                 # 挙動の急激な変化を防ぐため、前方25m〜15mの間で徐々にオフセットを増やす
                 if long_dist > 15.0:
-                    offset_val = -3.5 * (1.0 - (long_dist - 15.0) / 10.0)
+                    offset_val = 3.5 * (1.0 - (long_dist - 15.0) / 10.0)
                 else:
-                    offset_val = -3.5
+                    offset_val = 3.5
             elif -15.0 <= long_dist < 0.0:
                 # 障害物を通過した後、15mかけて元の車線に滑らかに戻る
-                offset_val = -3.5 * (1.0 - (abs(long_dist) / 15.0))
+                offset_val = 3.5 * (1.0 - (abs(long_dist) / 15.0))
                 
             if abs(offset_val) > 0.01:
-                # 目標位置を左側（右ベクトルのマイナス方向）にオフセット
+                # 目標位置を右側（右ベクトルのプラス方向）にオフセット
                 right_vector = target_wp.transform.get_right_vector()
                 target_loc = target_wp.transform.location + right_vector * offset_val
                 
