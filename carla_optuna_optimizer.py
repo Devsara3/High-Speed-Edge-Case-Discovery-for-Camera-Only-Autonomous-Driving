@@ -75,6 +75,9 @@ class RealCarlaEnv:
             self.actors.append(self.target_vehicle)
             print(f"Target vehicle (Truck) spawned at {target_location}")
 
+            # 旁观者视角：从高处俯瞰，同时看到两辆车
+            self._update_spectator()
+
             # 3. フロントガラス上部にRGBカメラを取り付ける
             camera_bp = self.blueprint_library.find('sensor.camera.rgb')
             camera_bp.set_attribute('image_size_x', '1280')
@@ -103,6 +106,25 @@ class RealCarlaEnv:
         except Exception as e:
             self.destroy()
             raise e
+
+    def _update_spectator(self):
+        """
+        更新CARLA客户端旁观者视角，使其从后方高处俯瞰两辆车。
+        """
+        if self.ego_vehicle is None or self.target_vehicle is None:
+            return
+        ego_loc = self.ego_vehicle.get_location()
+        target_loc = self.target_vehicle.get_location()
+        # 旁观者放在自车后方上方
+        spectator_location = carla.Location(
+            x=ego_loc.x - 15.0,
+            y=ego_loc.y,
+            z=ego_loc.z + 8.0
+        )
+        spectator_rotation = carla.Rotation(pitch=-15.0, yaw=0.0, roll=0.0)
+        self.world.get_spectator().set_transform(
+            carla.Transform(spectator_location, spectator_rotation)
+        )
 
     def set_weather(self, sun_altitude_angle, precipitation, fog_density):
         """
@@ -165,7 +187,8 @@ class RealCarlaEnv:
         ego_transform = spawn_points[0]
         ego_transform.location.z += 0.5
         self.ego_vehicle.set_transform(ego_transform)
-        self.ego_vehicle.set_target_velocity(carla.Vector3D(x=15.0, y=0.0, z=0.0)) # 15 m/s (~54 km/h)で前進
+        fwd = ego_transform.get_forward_vector()
+        self.ego_vehicle.set_target_velocity(carla.Vector3D(x=fwd.x * 15.0, y=fwd.y * 15.0, z=fwd.z * 15.0))  # 15 m/s, 沿车辆正前方
         
         # 相手車の再配置 (自車の30m前方で停止状態に固定)
         forward_vector = ego_transform.get_forward_vector()
@@ -178,6 +201,8 @@ class RealCarlaEnv:
         # 物理エンジンを落ち着かせるために同期モードで数フレームTick
         for _ in range(5):
             self.world.tick()
+        # 旁观者视角也同步更新
+        self._update_spectator()
         self.last_image = None
 
     def destroy(self):
