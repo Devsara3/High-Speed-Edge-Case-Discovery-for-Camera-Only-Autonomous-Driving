@@ -235,7 +235,7 @@ def main():
             # ---------------------------------------------------------
             # 1. Planning (計画) : ウェイポイントと偏差(CTE)の計算
             # ---------------------------------------------------------
-            target_wp = planner.get_target_waypoint(lookahead_distance=5.0)
+            target_wp = planner.get_target_waypoint(lookahead_distance=5.0, obstacle=obstacle_vehicle)
             steering_error = planner.calculate_steering_error(target_wp)
             target_speed = args.target_speed
             
@@ -306,9 +306,9 @@ def main():
                 else:
                     consecutive_stopped = 0
                 
-                # 衝突判定
-                if actual_dist < 3.8:
-                    print("\n[COLLISION] Ego vehicle got too close or collided with the obstacle!")
+                # 衝突判定 (回避中は真横を通過するため、接触判定限界の2.2mに緩和)
+                if actual_dist < 2.2:
+                    print("\n[COLLISION] Ego vehicle collided with the obstacle!")
                     break
                     
             if step_count > 500: # 最大25秒でタイムアウト
