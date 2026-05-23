@@ -16,6 +16,7 @@ class MockCarlaEnv:
         self.sun_altitude_angle = 90.0
         self.precipitation = 0.0
         self.fog_density = 0.0
+        self.traffic_light_color = 'red'  # 'red', 'yellow', 'green'
 
     def set_weather(self, sun_altitude_angle=90.0, precipitation=0.0, fog_density=0.0):
         """
@@ -28,29 +29,39 @@ class MockCarlaEnv:
         self.precipitation = precipitation
         self.fog_density = fog_density
 
+    def set_traffic_light_color(self, color):
+        """
+        信号の色を設定します。
+        :param color: 'red', 'yellow', 'green'
+        """
+        if color in ['red', 'yellow', 'green']:
+            self.traffic_light_color = color
+        else:
+            raise ValueError(f"Invalid traffic light color: {color}")
+
     def get_image(self):
         """
         現在の天候パラメータに基づいてベース画像にエフェクトをかけた画像を返します。
         """
         img = self.base_image.copy().astype(np.float32)
 
+        sun_alt = self.sun_altitude_angle
+        fog_den = self.fog_density
+        precip = self.precipitation
+
         # 1. 太陽高度（明るさ）エフェクト
-        # sun_altitude_angle: 90が最も明るく、0以下は夜（真っ暗）
-        # 簡単のため、-15度以下はほぼ見えないようにする
-        brightness_factor = max(0.1, min(1.0, (self.sun_altitude_angle + 15) / 105.0))
+        brightness_factor = max(0.1, min(1.0, (sun_alt + 15) / 105.0))
         img = img * brightness_factor
 
         # 2. 霧（Fog）エフェクト
-        # fog_density: 画像全体を白っぽくし、コントラストを下げる
-        if self.fog_density > 0:
-            fog_factor = self.fog_density / 100.0
+        if fog_den > 0:
+            fog_factor = fog_den / 100.0
             white_img = np.full_like(img, 255.0)
             img = cv2.addWeighted(img, 1.0 - (fog_factor * 0.8), white_img, fog_factor * 0.8, 0)
 
         # 3. 雨（Precipitation）エフェクト
-        # 画像にランダムなノイズ（雨粒）と全体的なぼかしを追加
-        if self.precipitation > 0:
-            rain_factor = self.precipitation / 100.0
+        if precip > 0:
+            rain_factor = precip / 100.0
             
             # ガウシアンノイズの追加
             noise = np.random.normal(0, 20 * rain_factor, img.shape)
@@ -59,7 +70,6 @@ class MockCarlaEnv:
             # ぼかしの追加 (水滴による視界不良のシミュレート)
             blur_kernel = int(3 * rain_factor) * 2 + 1 # 1, 3, 5, 7...
             if blur_kernel > 1:
-                # float32なので一時的にuint8に変換してぼかす
                 img_uint8 = np.clip(img, 0, 255).astype(np.uint8)
                 img = cv2.GaussianBlur(img_uint8, (blur_kernel, blur_kernel), 0).astype(np.float32)
 
@@ -67,15 +77,39 @@ class MockCarlaEnv:
 
     def get_ground_truth(self):
         """
-        モック画像のシーンに対応する、固定の真値（Ground Truth）データを返します。
-        本番のCARLA環境では、ここでAPIから動的にegoやtargetの情報を取得します。
+        モック画像のシーンに対応する、複数のオブジェクトの真値（Ground Truth）データを返します。
         """
+        tl_mu = 2.0 if self.traffic_light_color in ['red', 'yellow'] else 0.0
         return {
             'ego_pos': [0.0, 0.0, 0.0],       # 自車位置
             'ego_vel': [13.8, 0.0, 0.0],      # 自車速度 (約50km/hで前進)
-            'target_pos': [15.0, 0.0, 0.0],   # 相手車両位置 (15m前方)
-            'target_vel': [0.0, 0.0, 0.0],    # 相手車両速度 (停止中)
-            'target_class': 'car'             # 相手車両のクラス
+            'obstacles': [
+                {
+                    'class': 'pedestrian',
+                    'pos': [10.0, 1.5, 0.0],   # 10m前方
+                    'vel': [0.0, -1.0, 0.0],   # 横断速度
+                    'mu': 1.8
+                },
+                {
+                    'class': 'car',
+                    'pos': [25.0, 0.0, 0.0],   # 25m前方
+                    'vel': [10.0, 0.0, 0.0],   # 先行車速度
+                    'mu': 1.0
+                },
+                {
+                    'class': 'construction_signal', # 静止標識/バリケード
+                    'pos': [18.0, -2.0, 0.0],
+                    'vel': [0.0, 0.0, 0.0],
+                    'mu': 1.5
+                },
+                {
+                    'class': 'traffic_light',
+                    'pos': [20.0, 0.0, 5.0],
+                    'vel': [0.0, 0.0, 0.0],
+                    'color': self.traffic_light_color,
+                    'mu': tl_mu
+                }
+            ]
         }
 
 if __name__ == "__main__":

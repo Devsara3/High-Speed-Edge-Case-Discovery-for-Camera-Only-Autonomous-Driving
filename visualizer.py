@@ -3,112 +3,73 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 
-def plot_results(tpe_csv_path, random_csv_path, output_dir="results"):
+def plot_results(output_dir="results"):
     os.makedirs(output_dir, exist_ok=True)
-
-    # データの読み込み
-    try:
-        df_tpe = pd.read_csv(tpe_csv_path)
-        df_random = pd.read_csv(random_csv_path)
-    except FileNotFoundError as e:
-        print(f"Error loading data: {e}")
+    
+    tpe_red_path = os.path.join(output_dir, "history_tpe_red.csv")
+    tpe_green_path = os.path.join(output_dir, "history_tpe_green.csv")
+    
+    if not os.path.exists(tpe_red_path):
+        print(f"Error: {tpe_red_path} not found. Run optimizer.py first.")
         return
-
-    # 1. 時間対効果曲線 (Best score over trials)
-    # TPEとRandomで、現在のトライアルまでに見つかった「最小スコア」を計算
-    df_tpe['best_score'] = df_tpe['r_perceived'].cummin()
-    df_random['best_score'] = df_random['r_perceived'].cummin()
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(df_tpe['trial'], df_tpe['best_score'], label='Optuna (TPE) - Proposed', marker='o', markersize=4)
-    plt.plot(df_random['trial'], df_random['best_score'], label='Random Search - Baseline', marker='x', markersize=4)
+        
+    df_red = pd.read_csv(tpe_red_path)
     
-    plt.title('Time-Effectiveness Curve (Edge Case Search)')
-    plt.xlabel('Number of Trials')
-    plt.ylabel('Best (Minimum) Score (Lower is more critical)')
-    plt.legend()
-    plt.grid(True)
+    # グラフのスタイル設定 (Seabornのホワイトグリッド)
+    plt.style.use('seaborn-v0_8-whitegrid' if 'seaborn-v0_8-whitegrid' in plt.style.available else 'default')
+    sns.set_context("talk")
+    
+    # ------------------ 1. 脆弱性（知覚ギャップ）の推移（赤信号） ------------------
+    plt.figure(figsize=(12, 6))
+    plt.plot(df_red['trial'], df_red['gap'], label='Perception Gap (Vulnerability)', color='#e056fd', marker='o', linewidth=2)
+    
+    plt.title('Vulnerability (Perception Gap) Trend: Standard RGB Camera (Red Light Scenario)', fontsize=16, fontweight='bold', pad=15)
+    plt.xlabel('Optimization Trials', fontsize=12)
+    plt.ylabel('Perception Gap (Vulnerability)', fontsize=12)
+    plt.legend(frameon=True, facecolor='white', edgecolor='none')
+    plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "time_effectiveness_curve.png"))
+    plt.savefig(os.path.join(output_dir, "vulnerability_trend.png"), dpi=150)
     plt.close()
-
-    # 2. 脆弱性マップ (Vulnerability Map / Parameter Scatter)
-    # スコアが低い（危険な）領域を可視化。TPEの結果を使用
-    plt.figure(figsize=(10, 8))
-    # スコアに基づいて色付け。スコアが低いほど赤くする
-    scatter = plt.scatter(
-        df_tpe['sun_altitude_angle'], 
-        df_tpe['fog_density'], 
-        c=df_tpe['r_perceived'], 
-        s=df_tpe['precipitation']*2 + 10, # 雨の強さを点の大きさで表現
-        cmap='coolwarm',
-        alpha=0.8
+    
+    # ------------------ 2. パラメータ空間における脆弱性マップ ------------------
+    plt.figure(figsize=(12, 8))
+    
+    sc = plt.scatter(
+        df_red['sun_altitude_angle'], 
+        df_red['fog_density'], 
+        c=df_red['gap'], 
+        s=df_red['precipitation']*3 + 10,
+        cmap='plasma',
+        alpha=0.8,
+        edgecolors='w',
+        linewidth=0.5
     )
-    plt.colorbar(scatter, label='Detection Score (Lower = Higher Risk)')
-    plt.title('Vulnerability Map (TPE Search)')
-    plt.xlabel('Sun Altitude Angle (-15 to 90)')
-    plt.ylabel('Fog Density (0 to 100)')
-    
-    # 注釈
-    plt.text(0.05, 0.95, 'Size of points represents Precipitation', transform=plt.gca().transAxes,
-             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-             
-    plt.grid(True)
+    plt.colorbar(sc, label='Perception Gap (Vulnerability)')
+    plt.title('Parameter Space Vulnerability Map (Point Size = Precipitation)', fontsize=16, fontweight='bold', pad=15)
+    plt.xlabel('Sun Altitude Angle (deg)', fontsize=12)
+    plt.ylabel('Fog Density (%)', fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "vulnerability_map.png"))
+    plt.savefig(os.path.join(output_dir, "vulnerability_map.png"), dpi=150)
     plt.close()
     
-    print(f"Plots saved to '{output_dir}'")
+    # ------------------ 3. 信号機の色（赤 vs 青/緑）による影響の箱ひげ図 ------------------
+    if os.path.exists(tpe_green_path):
+        df_green = pd.read_csv(tpe_green_path)
+        
+        plt.figure(figsize=(10, 6))
+        # 箱ひげ図で比較
+        sns.boxplot(data=[df_red['gap'], df_green['gap']], palette=['#ff7675', '#55efc4'])
+        plt.xticks([0, 1], ['Red Traffic Light', 'Green Traffic Light'])
+        plt.ylabel('Perception Gap (Vulnerability)', fontsize=12)
+        plt.title('Impact of Traffic Light Color on RGB Safety Risk', fontsize=16, fontweight='bold', pad=15)
+        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "traffic_light_color_impact.png"), dpi=150)
+        plt.close()
+        
+    print(f"[SUCCESS] Visualizations saved to '{output_dir}/'")
 
 if __name__ == "__main__":
-    # 自动检测是真实CARLA结果还是Mock结果
-    real_tpe = "results/real_history_TPE.csv"
-    real_random = "results/real_history_Random.csv"
-    mock_tpe = "results/history_tpe.csv"
-    mock_random = "results/history_random.csv"
-
-    if os.path.exists(real_tpe):
-        tpe_path, random_path = real_tpe, real_random
-    elif os.path.exists(mock_tpe):
-        tpe_path, random_path = mock_tpe, mock_random
-    else:
-        print("No result CSV found in results/. Run optimizer.py or carla_optuna_optimizer.py first.")
-        exit(1)
-
-    if not os.path.exists(random_path):
-        print(f"Only TPE data found ({tpe_path}), generating single-result visualizations...")
-        df = pd.read_csv(tpe_path)
-        os.makedirs("results", exist_ok=True)
-
-        plt.figure(figsize=(10, 6))
-        plt.plot(df['trial'], df['r_perceived'], 'o-', markersize=4, alpha=0.7)
-        plt.axhline(y=df['r_perceived'].min(), color='red', linestyle='--', label=f'Min = {df["r_perceived"].min():.4f}')
-        plt.title('Perceived Risk per Trial (TPE)')
-        plt.xlabel('Trial')
-        plt.ylabel('Perceived Risk (Lower = More Dangerous)')
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig("results/risk_per_trial.png")
-        plt.close()
-
-        plt.figure(figsize=(10, 8))
-        scatter = plt.scatter(
-            df['sun_altitude_angle'], df['fog_density'],
-            c=df['r_perceived'], s=df['precipitation'] * 2 + 10,
-            cmap='coolwarm', alpha=0.8
-        )
-        plt.colorbar(scatter, label='Perceived Risk (Lower = More Dangerous)')
-        plt.title('Vulnerability Map (TPE Search)')
-        plt.xlabel('Sun Altitude Angle')
-        plt.ylabel('Fog Density')
-        plt.text(0.05, 0.95, 'Size = Precipitation', transform=plt.gca().transAxes,
-                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig("results/vulnerability_map.png")
-        plt.close()
-
-        print(f"Plots saved to 'results/'")
-    else:
-        plot_results(tpe_path, random_path)
+    plot_results()

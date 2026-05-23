@@ -1,7 +1,7 @@
 """
 CARLA Real-World Optuna Optimizer
 本物のCARLAシミュレータに接続し、同期モードで物理天気パラメータをベイズ最適化（Optuna）を用いて直接操作、
-単眼3D物体検出（YOLO3D/v8）のエッジケース（知覚リスクが最小＝AIの見落とし・危険性の過小評価）を高速探索する本番用パイプライン。
+単眼3D物体検出の複数障害物（歩行者、工事標識、他車、信号の色）に対応した脆弱性パイプライン。
 """
 
 import argparse
@@ -30,8 +30,13 @@ class RealCarlaEnv:
         # クリーンアップ用のアクター追跡リスト
         self.actors = []
         self.ego_vehicle = None
-        self.target_vehicle = None
+        self.target_vehicles = []  # 複数車両
+        self.pedestrian = None
+        self.construction_barrier = None
         self.camera = None
+        
+        # 信号機の制御用
+        self.traffic_light_color = 'red'
         
         # スレッドセーフな同期キューの初期化
         self.image_queue = queue.Queue()
@@ -40,7 +45,7 @@ class RealCarlaEnv:
         self.original_settings = self.world.get_settings()
         self.settings = self.world.get_settings()
         self.settings.synchronous_mode = True
-        self.settings.fixed_delta_seconds = 0.05 # 20 FPS (PID制御のdtと最適に一致)
+        self.settings.fixed_delta_seconds = 0.05 # 20 FPS
         self.world.apply_settings(self.settings)
         print("Synchronous mode enabled (dt = 0.05s).")
 
@@ -49,45 +54,71 @@ class RealCarlaEnv:
 
     def _setup_scenario(self):
         """
-        評価用の固定シナリオ（直線接近シナリオ）をロードしてアクターをスポーンします。
+        評価用の固定シナリオ（複数障害物・信号機配置）をロードしてアクターをスポーンします。
         """
         try:
             # 1. 自車 (Ego Vehicle: Tesla Model 3) のスポーン
             ego_bp = self.blueprint_library.filter('model3')[0]
-            # Town01などの直線道路上で確実な位置にスポーンするため、最初のスポーンポイントを利用
             spawn_points = self.world.get_map().get_spawn_points()
             if not spawn_points:
                 raise RuntimeError("No spawn points found on the map.")
             
-            # 安全な特定の場所を基準にする (ここでは最初のポイント)
             ego_transform = spawn_points[0]
-            ego_transform.location.z += 0.5 # 地面へのめり込み防止
+            ego_transform.location.z += 0.5
             
             self.ego_vehicle = self.world.spawn_actor(ego_bp, ego_transform)
             self.actors.append(self.ego_vehicle)
             print(f"Ego vehicle (Tesla Model 3) spawned at {ego_transform.location}")
 
-            # 2. 相手車 (Target Vehicle: 大型トラック) を30メートル前方に配置
-            target_bp = self.blueprint_library.filter('carlacola')[0]
-            forward_vector = ego_transform.get_forward_vector()
-            target_location = ego_transform.location + forward_vector * 30.0
-            target_location.z += 0.5
-            target_transform = carla.Transform(target_location, ego_transform.rotation)
+            # 2. 先行車 1 (一般車: 25m前方)
+            lead_bp = self.blueprint_library.filter('model3')[0]
+            fwd = ego_transform.get_forward_vector()
+            lead_loc = ego_transform.location + fwd * 25.0
+            lead_loc.z += 0.5
+            lead_transform = carla.Transform(lead_loc, ego_transform.rotation)
+            lead_car = self.world.spawn_actor(lead_bp, lead_transform)
+            self.actors.append(lead_car)
+            self.target_vehicles.append(lead_car)
             
-            self.target_vehicle = self.world.spawn_actor(target_bp, target_transform)
-            self.actors.append(self.target_vehicle)
-            print(f"Target vehicle (Truck) spawned at {target_location}")
+            # 3. 先行車 2 (大型トラック: 35m前方)
+            truck_bp = self.blueprint_library.filter('carlacola')[0]
+            truck_loc = ego_transform.location + fwd * 35.0
+            truck_loc.z += 0.5
+            truck_transform = carla.Transform(truck_loc, ego_transform.rotation)
+            truck_car = self.world.spawn_actor(truck_bp, truck_transform)
+            self.actors.append(truck_car)
+            self.target_vehicles.append(truck_car)
 
-            # 旁观者视角：从高处俯瞰，同时看到两辆车
-            self._update_spectator()
+            # 4. 歩行者 (Pedestrian: 10m前方、少し左側にスポーンして横断開始)
+            ped_bp = self.blueprint_library.filter('walker.pedestrian.*')[0]
+            right_vector = ego_transform.get_right_vector()
+            ped_loc = ego_transform.location + fwd * 10.0 - right_vector * 3.0
+            ped_loc.z += 0.5
+            ped_transform = carla.Transform(ped_loc, ego_transform.rotation)
+            self.pedestrian = self.world.spawn_actor(ped_bp, ped_transform)
+            self.actors.append(self.pedestrian)
+            
+            # 歩行者に移動制御を追加 (横断歩道を渡る挙動)
+            ped_control = carla.WalkerControl()
+            ped_control.direction = right_vector
+            ped_control.speed = 1.0 # 1m/s
+            self.pedestrian.apply_control(ped_control)
+            print(f"Pedestrian spawned crossing the road.")
 
-            # 3. フロントガラス上部にRGBカメラを取り付ける
+            # 5. 工事用バリケード (Construction Signal: 18m前方、右側の路肩)
+            barrier_bp = self.blueprint_library.find('static.prop.constructioncone')
+            barrier_loc = ego_transform.location + fwd * 18.0 + right_vector * 2.0
+            barrier_loc.z += 0.2
+            barrier_transform = carla.Transform(barrier_loc, ego_transform.rotation)
+            self.construction_barrier = self.world.spawn_actor(barrier_bp, barrier_transform)
+            self.actors.append(self.construction_barrier)
+
+            # 6. カメラセンサーの取り付け (フロントガラス上部)
             camera_bp = self.blueprint_library.find('sensor.camera.rgb')
             camera_bp.set_attribute('image_size_x', '1280')
             camera_bp.set_attribute('image_size_y', '720')
             camera_bp.set_attribute('fov', '110')
             
-            # フロントガラス上部 (x=2.0, z=1.4) で少し下向き (pitch=-5度)
             camera_transform = carla.Transform(
                 carla.Location(x=2.0, y=0.0, z=1.4),
                 carla.Rotation(pitch=-5.0, yaw=0.0, roll=0.0)
@@ -95,31 +126,26 @@ class RealCarlaEnv:
             self.camera = self.world.spawn_actor(camera_bp, camera_transform, attach_to=self.ego_vehicle)
             self.actors.append(self.camera)
 
-            # カメラ画像のストリームを同期で待ち受けるコールバックを登録
+            # カメラ画像コールバック
             def _on_camera_capture(image):
-                # CARLA画像バッファからnumpy BGR画像への変換
                 array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
                 array = np.reshape(array, (image.height, image.width, 4))
                 bgr_image = array[:, :, :3]
-                # 画像を同期キューに投入
                 self.image_queue.put(bgr_image)
 
             self.camera.listen(_on_camera_capture)
-            print("Front Camera mounted and listen callback registered.")
+            
+            # 旁観者視点アップデート
+            self._update_spectator()
 
         except Exception as e:
             self.destroy()
             raise e
 
     def _update_spectator(self):
-        """
-        更新CARLA客户端旁观者视角，使其从后方高处俯瞰两辆车。
-        """
-        if self.ego_vehicle is None or self.target_vehicle is None:
+        if self.ego_vehicle is None:
             return
         ego_loc = self.ego_vehicle.get_location()
-        target_loc = self.target_vehicle.get_location()
-        # 旁观者放在自车后方上方
         spectator_location = carla.Location(
             x=ego_loc.x - 15.0,
             y=ego_loc.y,
@@ -132,35 +158,60 @@ class RealCarlaEnv:
 
     def set_weather(self, sun_altitude_angle, precipitation, fog_density):
         """
-        CARLAの環境物理ツマミ（天候パラメータ）を動的に操作します。
+        CARLAの環境物理パラメータを設定。
         """
         weather = carla.WeatherParameters(
             sun_altitude_angle=sun_altitude_angle,
             precipitation=precipitation,
             fog_density=fog_density,
-            cloudiness=max(precipitation, fog_density), # 雨や霧に応じて雲量も自動連動
-            wetness=precipitation, # 雨量に応じて路面の濡れ（反射）を設定
+            cloudiness=max(precipitation, fog_density),
+            wetness=precipitation,
             wind_intensity=10.0
         )
         self.world.set_weather(weather)
-        # 設定を確定するために同期ワールドを進める
         self.world.tick()
+
+    def set_traffic_light_color(self, color):
+        """
+        車両前方の最寄り信号機アクターを制御します。
+        """
+        self.traffic_light_color = color
+        ego_loc = self.ego_vehicle.get_location()
+        
+        # 自車に一番近い信号機アクターを検索
+        traffic_lights = self.world.get_actors().filter('traffic.traffic_light')
+        closest_light = None
+        min_dist = float('inf')
+        
+        for tl in traffic_lights:
+            dist = tl.get_location().distance(ego_loc)
+            if dist < min_dist:
+                min_dist = dist
+                closest_light = tl
+                
+        if closest_light is not None:
+            state = carla.TrafficLightState.Green
+            if color == 'red':
+                state = carla.TrafficLightState.Red
+            elif color == 'yellow':
+                state = carla.TrafficLightState.Yellow
+                
+            closest_light.set_state(state)
+            closest_light.set_red_time(100.0)  # テスト期間中に変わらないように固定
+            closest_light.set_yellow_time(100.0)
+            closest_light.set_green_time(100.0)
+            # 設定確定のため同期更新
+            self.world.tick()
 
     def get_image(self):
         """
-        カメラセンサーから最新の画像フレームを取得します。
+        最新の画像フレームを取得。
         """
-        # 同期tickを実行してアクターの物理更新とカメラ撮影を進める
         self.world.tick()
-        
         try:
-            # 同期ワールドを進めた後、画像キューにデータが届くのを待つ (タイムアウト2.0秒)
             bgr_image = self.image_queue.get(timeout=2.0)
-            
-            # キューに古いフレームが溜まっていたら破棄し、最新のものを取得する
             while not self.image_queue.empty():
                 bgr_image = self.image_queue.get_nowait()
-                
             return bgr_image
         except queue.Empty:
             print("Warning: Camera frame queue timeout. Returning dummy image.")
@@ -168,87 +219,140 @@ class RealCarlaEnv:
 
     def get_ground_truth(self):
         """
-        CARLAシミュレータの内部物理真値 (Ground Truth) をダイレクトに取得します。
+        CARLAシミュレータから直接物理真値（Ground Truth）のリストを取得。
         """
-        ego_loc = self.ego_vehicle.get_transform().location
+        ego_transform = self.ego_vehicle.get_transform()
+        ego_loc = ego_transform.location
         ego_vel = self.ego_vehicle.get_velocity()
         
-        target_loc = self.target_vehicle.get_transform().location
-        target_vel = self.target_vehicle.get_velocity()
+        obstacles = []
+        
+        # 1. 歩行者
+        if self.pedestrian is not None and self.pedestrian.is_alive:
+            ped_loc = self.pedestrian.get_location()
+            ped_vel = self.pedestrian.get_velocity()
+            obstacles.append({
+                'class': 'pedestrian',
+                'pos': [ped_loc.x, ped_loc.y, ped_loc.z],
+                'vel': [ped_vel.x, ped_vel.y, ped_vel.z],
+                'mu': 1.8
+            })
+            
+        # 2. 先行車両
+        for idx, vehicle in enumerate(self.target_vehicles):
+            if vehicle.is_alive:
+                v_loc = vehicle.get_location()
+                v_vel = vehicle.get_velocity()
+                obstacles.append({
+                    'class': 'car',
+                    'pos': [v_loc.x, v_loc.y, v_loc.z],
+                    'vel': [v_vel.x, v_vel.y, v_vel.z],
+                    'mu': 1.0 if idx == 0 else 1.2
+                })
+                
+        # 3. 工事用バリケード
+        if self.construction_barrier is not None and self.construction_barrier.is_alive:
+            b_loc = self.construction_barrier.get_location()
+            obstacles.append({
+                'class': 'construction_signal',
+                'pos': [b_loc.x, b_loc.y, b_loc.z],
+                'vel': [0.0, 0.0, 0.0],
+                'mu': 1.5
+            })
+            
+        # 4. 信号機
+        # 仮想の信号機真値位置として自車の20m前方を定義
+        fwd = ego_transform.get_forward_vector()
+        tl_pos = ego_loc + fwd * 20.0
+        tl_mu = 2.0 if self.traffic_light_color in ['red', 'yellow'] else 0.0
+        obstacles.append({
+            'class': 'traffic_light',
+            'pos': [tl_pos.x, tl_pos.y, tl_pos.z + 5.0],
+            'vel': [0.0, 0.0, 0.0],
+            'color': self.traffic_light_color,
+            'mu': tl_mu
+        })
         
         return {
             'ego_pos': [ego_loc.x, ego_loc.y, ego_loc.z],
             'ego_vel': [ego_vel.x, ego_vel.y, ego_vel.z],
-            'target_pos': [target_loc.x, target_loc.y, target_loc.z],
-            'target_vel': [target_vel.x, target_vel.y, target_vel.z],
-            'target_class': 'truck'
+            'obstacles': obstacles
         }
 
     def reset_actors_physics(self):
         """
-        アクターの位置と速度を初期の安全な状態に物理リセットします。
+        アクターの位置と速度を初期化。
         """
-        # 自車の再配置 (初期位置へ)
         spawn_points = self.world.get_map().get_spawn_points()
         ego_transform = spawn_points[0]
         ego_transform.location.z += 0.5
         self.ego_vehicle.set_transform(ego_transform)
         fwd = ego_transform.get_forward_vector()
-        self.ego_vehicle.set_target_velocity(carla.Vector3D(x=fwd.x * 15.0, y=fwd.y * 15.0, z=fwd.z * 15.0))  # 15 m/s, 沿车辆正前方
+        self.ego_vehicle.set_target_velocity(carla.Vector3D(x=fwd.x * 15.0, y=fwd.y * 15.0, z=fwd.z * 15.0))
         
-        # 相手車の再配置 (自車の30m前方で停止状態に固定)
-        forward_vector = ego_transform.get_forward_vector()
-        target_location = ego_transform.location + forward_vector * 30.0
-        target_location.z += 0.5
-        target_transform = carla.Transform(target_location, ego_transform.rotation)
-        self.target_vehicle.set_transform(target_transform)
-        self.target_vehicle.set_target_velocity(carla.Vector3D(0, 0, 0)) # 停止車
+        # 他アクターも再配置
+        # 先行車 1
+        lead_loc = ego_transform.location + fwd * 25.0
+        lead_loc.z += 0.5
+        self.target_vehicles[0].set_transform(carla.Transform(lead_loc, ego_transform.rotation))
+        self.target_vehicles[0].set_target_velocity(carla.Vector3D(x=fwd.x * 10.0, y=fwd.y * 10.0, z=fwd.z * 10.0))
+        
+        # トラック
+        truck_loc = ego_transform.location + fwd * 35.0
+        truck_loc.z += 0.5
+        self.target_vehicles[1].set_transform(carla.Transform(truck_loc, ego_transform.rotation))
+        self.target_vehicles[1].set_target_velocity(carla.Vector3D(0, 0, 0))
+        
+        # 歩行者
+        right_vector = ego_transform.get_right_vector()
+        ped_loc = ego_transform.location + fwd * 10.0 - right_vector * 3.0
+        ped_loc.z += 0.5
+        self.pedestrian.set_transform(carla.Transform(ped_loc, ego_transform.rotation))
+        ped_control = carla.WalkerControl()
+        ped_control.direction = right_vector
+        ped_control.speed = 1.0
+        self.pedestrian.apply_control(ped_control)
+        
+        # 工事用バリケード
+        barrier_loc = ego_transform.location + fwd * 18.0 + right_vector * 2.0
+        barrier_loc.z += 0.2
+        self.construction_barrier.set_transform(carla.Transform(barrier_loc, ego_transform.rotation))
 
-        # 物理エンジンを落ち着かせるために同期モードで数フレームTick
         for _ in range(5):
             self.world.tick()
         
-        # キューをクリアして初期化
         while not self.image_queue.empty():
             try:
                 self.image_queue.get_nowait()
             except queue.Empty:
                 break
         
-        # 旁观者视角也同步更新
         self._update_spectator()
-        self.last_image = None
 
     def destroy(self):
-        """
-        アクターをすべて破棄し、CARLAの設定を元に戻すクリーンアップ処理（最重要）。
-        """
         print("Cleaning up CARLA real actors and restoring settings...")
         for actor in self.actors:
             if actor is not None and actor.is_alive:
                 actor.destroy()
         self.actors = []
+        self.target_vehicles = []
         
-        # 同期モードを解除して元のシミュレータ設定を復元
         try:
             self.world.apply_settings(self.original_settings)
             print("CARLA original settings restored successfully.")
         except Exception as e:
             print(f"Error restoring CARLA settings: {e}")
 
-
-def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
+def run_real_carla_optimization(n_trials=30, sampler_name='TPE', traffic_light_color='red'):
     """
-    ライブCARLAシミュレータとOptunaを接続し、最適化探索ループを実行します。
+    ライブCARLAシミュレータでOptuna最適化ループを実行し、標準RGBカメラの脆弱性を評価します。
     """
     os.makedirs("results", exist_ok=True)
     
-    # ライブ環境および評価モジュールのインスタンス化
     env = RealCarlaEnv()
     evaluator = YoloEvaluator()
     risk_calculator = RiskCalculator()
     
-    # 探索に使用するサンプラー
     if sampler_name == 'Random':
         sampler = optuna.samplers.RandomSampler(seed=42)
     else:
@@ -257,118 +361,89 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE'):
     study = optuna.create_study(direction="maximize", sampler=sampler)
     history = []
     
-    best_score_so_far = -float('inf')
+    worst_gap = -float('inf')
     
     try:
         def objective(trial):
-            nonlocal best_score_so_far
+            nonlocal worst_gap
             start_time = time.time()
             
-            # 各試行の前に車両の位置・速度をリセット（初期配置を固定）
             env.reset_actors_physics()
             
-            # Optunaによる天候パラメータ（ツマミ）の決定
-            sun_altitude_angle = trial.suggest_float("sun_altitude_angle", -15.0, 90.0) # 夜から昼、特に夕方西日を重点探索
-            precipitation = trial.suggest_float("precipitation", 0.0, 100.0) # 雨量
-            fog_density = trial.suggest_float("fog_density", 0.0, 100.0) # 霧の濃さ
+            sun_altitude_angle = trial.suggest_float("sun_altitude_angle", -15.0, 90.0)
+            precipitation = trial.suggest_float("precipitation", 0.0, 100.0)
+            fog_density = trial.suggest_float("fog_density", 0.0, 100.0)
             
-            # CARLAに天候を設定
+            # 環境設定
             env.set_weather(sun_altitude_angle, precipitation, fog_density)
+            env.set_traffic_light_color(traffic_light_color)
             
-            # 霧や雨による光学的な見え方を安定させるため、また接近による「手遅れシナリオ」をエミュレートするため
-            # 同期モードで15フレーム（0.75秒間）進行させ、接近しながら認識テストを行う
+            # 近接動作を安定させるため同期モードで15Tick進行
             for _ in range(15):
-                img = env.get_image()
+                env.get_image()
             
-            # 最も接近した状態（危険度のピーク）でのカメラ画像を取得して認識
+            # 最新カメラ画像の取得
             img = env.get_image()
-            
-            # YOLO（YOLO3Dエミュレータ）による認識（estimated Z-distance）
-            min_z_dist, confidence, annotated_img = evaluator.evaluate(img, return_image=True)
-            
-            # CARLAの物理真値（GT）を取得
             gt = env.get_ground_truth()
             
-            # 知覚リスクの算出
-            r_perceived, debug_info = risk_calculator.calculate_risk(
+            # RGBの推論とリスク評価
+            detections, annotated = evaluator.evaluate_multi(img, return_image=True)
+            r_perc, r_gt, gap, info = risk_calculator.calculate_multi_risk(
                 ego_pos=gt['ego_pos'], ego_vel=gt['ego_vel'],
-                target_pos=gt['target_pos'], target_vel=gt['target_vel'],
-                target_class=gt['target_class'],
-                yolo_z_distance=min_z_dist
+                gt_obstacles=gt['obstacles'], yolo_detections=detections
             )
             
-            # 真値（GT）に基づいた物理リスクの算出
-            r_gt, debug_info_gt = risk_calculator.calculate_risk(
-                ego_pos=gt['ego_pos'], ego_vel=gt['ego_vel'],
-                target_pos=gt['target_pos'], target_vel=gt['target_vel'],
-                target_class=gt['target_class'],
-                yolo_z_distance=debug_info['gt_distance']
-            )
-            
-            # 知覚ギャップスコア（物理リスク - 知覚リスク）
-            score = r_gt - r_perceived
-            
-            # エッジケース（最も過小評価した＝乖離ギャップが最大のケース）が更新された場合、結果画像を保存
-            if score > best_score_so_far:
-                best_score_so_far = score
-                cv2.imwrite(f"results/real_edge_case_worst_{sampler_name}.jpg", annotated_img)
-                print(f"--> [NEW WORST EDGE CASE FOUND] Perception Gap Score (Maximized): {score:.4f}")
+            if gap > worst_gap:
+                worst_gap = gap
+                cv2.imwrite(f"results/real_edge_case_worst_{sampler_name}_{traffic_light_color}.jpg", annotated)
+                print(f"--> [NEW WORST CARLA EDGE CASE] Gap Score: {gap:.4f}")
                 print(f"    Params: Sun={sun_altitude_angle:.2f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}")
-                print(f"    YOLO Estimated Z: {min_z_dist:.2f}m (GT Distance: {debug_info['gt_distance']:.2f}m)")
-                print(f"    GT Risk: {r_gt:.4f}, Perceived Risk: {r_perceived:.4f}")
                 
             elapsed_time = time.time() - start_time
             
-            # 実験履歴の記録
             history.append({
                 "trial": trial.number,
                 "sun_altitude_angle": sun_altitude_angle,
                 "precipitation": precipitation,
                 "fog_density": fog_density,
-                "yolo_z_distance": min_z_dist,
-                "gt_distance": debug_info['gt_distance'],
+                "traffic_light_color": traffic_light_color,
                 "r_gt": r_gt,
-                "r_perceived": r_perceived,
-                "perception_gap": score,
-                "omega": debug_info['omega'],
-                "alpha": debug_info['alpha'],
-                "beta": debug_info['beta'],
+                "r_perceived": r_perc,
+                "gap": gap,
+                "worst_obstacle": info['worst_obstacle'],
                 "elapsed_time_sec": elapsed_time
             })
             
-            return score
+            return gap
 
-        # 最適化探索の実行
         study.optimize(objective, n_trials=n_trials)
         
     finally:
-        # 必ずアクターを破棄してCARLAを元の設定に戻す（クラッシュ防止）
         env.destroy()
 
-    # 履歴をCSVに保存
+    # CSV書き出し
     df_history = pd.DataFrame(history)
-    df_history.to_csv(f"results/real_history_{sampler_name}.csv", index=False)
+    df_history.to_csv(f"results/real_history_{sampler_name}_{traffic_light_color}.csv", index=False)
     
     return study
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CARLA + Optuna edge-case search")
+    parser = argparse.ArgumentParser(description="CARLA + Optuna multi-obstacle edge-case search")
     parser.add_argument("--trials", type=int, default=30, help="Number of Optuna trials (default: 30)")
-    parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random"],
-                        help="Sampler: TPE or Random (default: TPE)")
+    parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random"], help="Sampler (default: TPE)")
+    parser.add_argument("--color", type=str, default="red", choices=["red", "green", "yellow"], help="Traffic light color (default: red)")
     args = parser.parse_args()
 
     print("====================================================")
-    print("  CARLA Live Optuna Edge-Case Discovery Pipeline")
-    print(f"  Trials: {args.trials}, Sampler: {args.sampler}")
+    print("  CARLA Live Optuna Multi-Obstacle Edge-Case Search")
+    print(f"  Trials: {args.trials}, Sampler: {args.sampler}, Signal Color: {args.color.upper()}")
     print("====================================================")
     
     try:
-        study = run_real_carla_optimization(n_trials=args.trials, sampler_name=args.sampler)
-        print(f"\n{args.sampler} Optimization complete!")
-        print(f"Worst Edge Case (Illusion of Safety) Perceived Risk: {study.best_trial.value:.4f}")
-        print(f"Weather parameters: {study.best_trial.params}")
-        
+        study = run_real_carla_optimization(n_trials=args.trials, sampler_name=args.sampler, traffic_light_color=args.color)
+        print(f"\n{args.sampler} CARLA Optimization completed!")
+        print(f"Worst Edge Case (Safety Illusion) Gap Score: {study.best_trial.value:.4f}")
+        print(f"Parameters: {study.best_trial.params}")
     except Exception as e:
-        print(f"\nFailed to execute pipeline: {e}")
-        print("Please ensure CARLA Simulator is running (e.g. Town01 map loaded) and the python-carla library is installed.")
+        print(f"\nFailed to execute live CARLA pipeline: {e}")
+        print("Please verify that CARLA server is running and python-carla is installed.")
