@@ -145,13 +145,22 @@ class RealCarlaEnv:
     def _update_spectator(self):
         if self.ego_vehicle is None:
             return
-        ego_loc = self.ego_vehicle.get_location()
+        ego_transform = self.ego_vehicle.get_transform()
+        ego_loc = ego_transform.location
+        fwd = ego_transform.get_forward_vector()
+        
+        # 车尾后方10m + 上方8m
         spectator_location = carla.Location(
-            x=ego_loc.x - 15.0,
-            y=ego_loc.y,
+            x=ego_loc.x - fwd.x * 10.0,
+            y=ego_loc.y - fwd.y * 10.0,
             z=ego_loc.z + 8.0
         )
-        spectator_rotation = carla.Rotation(pitch=-15.0, yaw=0.0, roll=0.0)
+        # 与车辆同向，俯视前方
+        spectator_rotation = carla.Rotation(
+            pitch=-20.0,
+            yaw=ego_transform.rotation.yaw,
+            roll=0.0
+        )
         self.world.get_spectator().set_transform(
             carla.Transform(spectator_location, spectator_rotation)
         )
