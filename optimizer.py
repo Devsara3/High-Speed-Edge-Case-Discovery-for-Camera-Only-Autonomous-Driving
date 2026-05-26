@@ -72,6 +72,8 @@ def run_optimization(env, evaluator, risk_calculator, n_trials=50, sampler_name=
             "precipitation": precipitation,
             "fog_density": fog_density,
             "traffic_light_color": traffic_light_color,
+            "yolo_z_distance": info['worst_yolo_distance'],
+            "gt_distance": info['worst_gt_distance'],
             "r_gt": r_gt,
             "r_perceived": r_perc,
             "gap": gap,

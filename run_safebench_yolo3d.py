@@ -83,6 +83,7 @@ class Yolo3dCarlaRunner(CarlaRunner):
             score_list = {s_i: [] for s_i in range(num_sampled_scenario)}
             gap_integrals = {s_i: 0.0 for s_i in range(num_sampled_scenario)}
             collision_occurred = {s_i: False for s_i in range(num_sampled_scenario)}
+            distance_records = {s_i: [] for s_i in range(num_sampled_scenario)}
             
             dt = self.fixed_delta_seconds # typically 0.05s
 
@@ -161,10 +162,18 @@ class Yolo3dCarlaRunner(CarlaRunner):
                         # Accumulate the Perception Gap over time (integration)
                         gap_integrals[scenario_id] += gap * dt
                         
-                        # Log critical safety-illusion frame
+                        # Record raw physical distances and target class
+                        distance_records[scenario_id].append({
+                            'gt_dist': detail_info['worst_gt_distance'],
+                            'yolo_dist': detail_info['worst_yolo_distance'],
+                            'obstacle': detail_info['worst_obstacle']
+                        })
+                        
+                        # Log critical safety-illusion frame with physical meters
                         if gap > 1.5:
                             self.logger.log(
-                                f"   [WARNING] Safety Illusion Frame in Scenario {scenario_id}: "
+                                f"   [WARNING] Safety Illusion in Scenario {scenario_id} ({detail_info['worst_obstacle']}): "
+                                f"GT-Dist={detail_info['worst_gt_distance']:.2f}m, YOLO-Dist={detail_info['worst_yolo_distance']:.2f}m, "
                                 f"GT-Risk={r_gt:.2f}, Perceived-Risk={r_perc:.2f}, Gap={gap:.2f}"
                             )
 
@@ -192,6 +201,14 @@ class Yolo3dCarlaRunner(CarlaRunner):
                 total_gap_integral = gap_integrals[s_id]
                 c_flag = collision_occurred[s_id]
                 
+                # Calculate max 3D distance error and detection miss rate
+                dists = distance_records[s_id]
+                valid_errors = [abs(d['yolo_dist'] - d['gt_dist']) for d in dists if not np.isinf(d['yolo_dist'])]
+                max_err = max(valid_errors) if len(valid_errors) > 0 else 0.0
+                miss_frames = sum([1 for d in dists if np.isinf(d['yolo_dist'])])
+                total_frames = len(dists)
+                miss_rate = (miss_frames / total_frames * 100) if total_frames > 0 else 0.0
+                
                 # J = (1.0 - Safety_Score) * Gap_Integral
                 # Safety Score is 1.0 if no collision, 0.0 if collision occurred
                 safety_score = 0.0 if c_flag else 1.0
@@ -199,12 +216,16 @@ class Yolo3dCarlaRunner(CarlaRunner):
 
                 self.logger.log(f"Scenario ID: {s_id}")
                 self.logger.log(f"  - Collision Occurred: {c_flag}")
+                self.logger.log(f"  - Max 3D Distance Error: {max_err:.2f}m")
+                self.logger.log(f"  - Detection Miss Frames: {miss_frames}/{total_frames} ({miss_rate:.1f}%)")
                 self.logger.log(f"  - Route Mean Reward: {mean_reward:.4f}")
                 self.logger.log(f"  - Cumulative Perception Gap (integral dt): {total_gap_integral:.4f}")
                 self.logger.log(f"  - Critical Edge Case Score (J = Safety_Fail * Gap): {j_score:.4f}", 'red' if j_score > 0 else 'green')
                 
                 self.final_edge_case_scores[s_id] = {
                     'collision': c_flag,
+                    'max_distance_error': max_err,
+                    'miss_rate': miss_rate,
                     'mean_reward': mean_reward,
                     'gap_integral': total_gap_integral,
                     'edge_case_score': j_score

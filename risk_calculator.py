@@ -189,10 +189,21 @@ class RiskCalculator:
                 'perception_gap': r_gt_scaled - r_perceived_scaled
             })
             
+        # 最悪障害物の物理的な距離情報を抽出
+        worst_gt_dist = 0.0
+        worst_yolo_dist = float('inf')
+        for res in per_obstacle_results:
+            if res['class'] == worst_obstacle_name:
+                worst_gt_dist = res['gt_distance']
+                worst_yolo_dist = res['yolo_distance']
+                break
+
         perception_gap = max_r_gt - max_r_perceived
         
         return max_r_perceived, max_r_gt, perception_gap, {
             'worst_obstacle': worst_obstacle_name,
+            'worst_gt_distance': worst_gt_dist,
+            'worst_yolo_distance': worst_yolo_dist,
             'details': per_obstacle_results
         }
 

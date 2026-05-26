@@ -407,6 +407,8 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE', traffic_light_c
                 "precipitation": precipitation,
                 "fog_density": fog_density,
                 "traffic_light_color": traffic_light_color,
+                "yolo_z_distance": info['worst_yolo_distance'],
+                "gt_distance": info['worst_gt_distance'],
                 "r_gt": r_gt,
                 "r_perceived": r_perc,
                 "gap": gap,

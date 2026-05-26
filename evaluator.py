@@ -142,7 +142,7 @@ class YoloEvaluator:
                         w_pixel = float(box.xywh[0][2])
                         focal_length = 800.0
                         
-                        # クラスに応じた代表幅の設定
+                        # 1. ピンホール幅モデルによる距離推定 (z_dist_width)
                         real_width = 1.8
                         if class_name == 'pedestrian':
                             real_width = 0.5
@@ -152,9 +152,43 @@ class YoloEvaluator:
                             real_width = 0.8
                             
                         if w_pixel > 1.0:
-                            z_dist = (focal_length * real_width) / w_pixel
+                            z_dist_width = (focal_length * real_width) / w_pixel
                         else:
-                            z_dist = float('inf')
+                            z_dist_width = float('inf')
+
+                        # 2. 接地面制約モデル (Ground Plane Constraint) による距離推定 (z_dist_ground)
+                        # カメラの高さ H = 1.4m、ピッチ角 pitch = -5.0度 (下向き) を想定
+                        H_cam = 1.4
+                        pitch_rad = np.radians(-5.0)
+                        
+                        # 画像の高さから垂直中心座標を算出
+                        c_y = processed_image.shape[0] / 2.0
+                        y2_val = float(y2)
+                        
+                        # 俯角 phi の計算 (画像中心からの偏角 + カメラピッチ角)
+                        angle_from_center = np.arctan((y2_val - c_y) / focal_length)
+                        phi = pitch_rad + angle_from_center
+                        
+                        # 自車からの水平距離の算出
+                        # カメラが下を向いているため、phi < 0 のときに路面と交差する
+                        if phi < -1e-3:
+                            z_dist_ground = H_cam / np.tan(-phi)
+                        else:
+                            z_dist_ground = float('inf')
+
+                        # 3. ハイブリッド距離の決定
+                        if class_name == 'traffic_light':
+                            # 信号機は空中に浮いているため、接地面モデルは適用せず幅モデルを100%採用
+                            z_dist = z_dist_width
+                        else:
+                            # どちらかが異常値の場合は他方を採用
+                            if np.isinf(z_dist_width) or z_dist_width > 150.0:
+                                z_dist = z_dist_ground
+                            elif np.isinf(z_dist_ground) or z_dist_ground > 150.0 or z_dist_ground < 1.0:
+                                z_dist = z_dist_width
+                            else:
+                                # 両方とも妥当な値の場合は、重み付け平均 (日中の幅縮小エラーを緩和するため接地面の重みを高く設定)
+                                z_dist = 0.4 * z_dist_width + 0.6 * z_dist_ground
                             
                     detections.append({
                         'class': class_name,
