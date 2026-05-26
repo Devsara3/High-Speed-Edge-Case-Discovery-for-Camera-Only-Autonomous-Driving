@@ -2,16 +2,40 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import glob
+
+def _find_csv(output_dir, suffix):
+    """自动检测 Mock (history_tpe_*.csv) 或 CARLA 真实 (real_history_TPE_*.csv) 结果文件"""
+    candidates = [
+        os.path.join(output_dir, f"real_history_TPE_{suffix}.csv"),
+        os.path.join(output_dir, f"real_history_Random_{suffix}.csv"),
+        os.path.join(output_dir, f"history_tpe_{suffix}.csv"),
+        os.path.join(output_dir, f"history_random_{suffix}.csv"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    # 兜底：通配符匹配
+    for pattern in [f"real_history_*_{suffix}.csv", f"history_*_{suffix}.csv"]:
+        matches = glob.glob(os.path.join(output_dir, pattern))
+        if matches:
+            return matches[0]
+    return None
 
 def plot_results(output_dir="results"):
     os.makedirs(output_dir, exist_ok=True)
     
-    tpe_red_path = os.path.join(output_dir, "history_tpe_red.csv")
-    tpe_green_path = os.path.join(output_dir, "history_tpe_green.csv")
+    tpe_red_path = _find_csv(output_dir, "red")
+    tpe_green_path = _find_csv(output_dir, "green")
     
-    if not os.path.exists(tpe_red_path):
-        print(f"Error: {tpe_red_path} not found. Run optimizer.py first.")
+    if tpe_red_path is None:
+        print(f"Error: 未找到 results/history_*_red.csv 或 results/real_history_*_red.csv")
+        print("请先运行 carla_optuna_optimizer.py 或 optimizer.py")
         return
+
+    print(f"使用数据: {tpe_red_path}")
+    if tpe_green_path:
+        print(f"使用数据: {tpe_green_path}")
         
     df_red = pd.read_csv(tpe_red_path)
     
@@ -55,7 +79,7 @@ def plot_results(output_dir="results"):
     plt.close()
     
     # ------------------ 3. 信号機の色（赤 vs 青/緑）による影響の箱ひげ図 ------------------
-    if os.path.exists(tpe_green_path):
+    if tpe_green_path and os.path.exists(tpe_green_path):
         df_green = pd.read_csv(tpe_green_path)
         
         plt.figure(figsize=(10, 6))
