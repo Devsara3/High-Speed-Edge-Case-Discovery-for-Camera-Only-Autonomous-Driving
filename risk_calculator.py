@@ -207,11 +207,141 @@ class RiskCalculator:
             'details': per_obstacle_results
         }
 
+class PerceivedRiskCalculator:
+    """
+    周辺の複数エージェントから受ける知覚リスクを、CARLA真値とYOLO3D予測値に基づいて算出するクラス。
+    """
+    def __init__(self, K=1.0, C=0.0, epsilon=1e-5, kappa=0.05, lambda_val=0.5):
+        self.K = K
+        self.C = C
+        self.epsilon = epsilon
+        self.kappa = kappa
+        self.lambda_val = lambda_val
+
+        # ② 相互作用の重み (omega) のデフォルト定数
+        self.omega_bi = 2.0      # パターン1: 両者が接近
+        self.omega_agent = 1.5   # パターン2: 相手だけが接近
+        self.omega_ego = 1.0     # パターン3: 自車だけが接近
+        self.omega_angr = 0.5    # パターン4: その他
+
+        # ③ カテゴリ係数 (mu) のルックアップテーブル
+        self.class_mu_table = {
+            'truck': 1.5, 'bus': 1.5, 'trailer': 1.5,
+            'car': 1.0, 'van': 1.0,
+            'pedestrian': 1.2,
+            'bicycle': 1.2, 'motorcycle': 1.2,
+            'unknown': 1.0
+        }
+
+    def compute_frame_risk(self, ego_pos, ego_vel, targets_data):
+        """
+        周辺に存在するすべてのエージェントのリスクスコアを計算し、代表リスクスコア r_t を返却します。
+        
+        :param ego_pos: 自車の真の3D位置 (x, y, z)
+        :param ego_vel: 自車の真の速度ベクトル (vx, vy, vz)
+        :param targets_data: 各エージェントの予測および真値データ辞書のリスト
+        :return: 統合代表リスクスコア (最大値), 詳細デバッグ情報
+        """
+        ego_pos = np.array(ego_pos, dtype=float)
+        ego_vel = np.array(ego_vel, dtype=float)
+        
+        max_r_perceived = 0.0
+        worst_obstacle = 'unknown'
+        worst_gt_dist = 0.0
+        worst_yolo_dist = float('inf')
+        details = []
+
+        for target in targets_data:
+            true_pos = np.array(target['true_pos'], dtype=float)
+            true_vel = np.array(target['true_vel'], dtype=float)
+            class_type = target['class_type']
+            yolo3d_rel_pos = target['yolo3d_rel_pos'] # [X_pred, Y_pred, Z_pred] 相対座標
+
+            # 真の相対位置ベクトルの計算
+            r_i = true_pos - ego_pos
+            distance_gt = np.linalg.norm(r_i)
+            
+            if distance_gt < 1e-3:
+                r_hat = np.array([1.0, 0.0, 0.0])
+            else:
+                r_hat = r_i / distance_gt
+
+            # ① 分母：YOLO3Dによる主観的距離の計算
+            if yolo3d_rel_pos is None:
+                # 見落としている場合は主観的距離無限大とし、リスクは0とする
+                r_perceived = 0.0
+                yolo_dist = float('inf')
+            else:
+                yolo_rel = np.array(yolo3d_rel_pos, dtype=float)
+                # 相対座標から直線距離の2乗を計算
+                r_hat_sq = np.sum(yolo_rel ** 2)
+                yolo_dist = np.sqrt(r_hat_sq)
+
+                # ② 相互作用の重み (omega) の判定
+                d_ego_to_target = np.dot(ego_vel, r_i)
+                d_target_to_ego = np.dot(true_vel, -r_i)
+
+                if d_ego_to_target > 0 and d_target_to_ego > 0:
+                    omega = self.omega_bi
+                elif d_ego_to_target <= 0 and d_target_to_ego > 0:
+                    omega = self.omega_agent
+                elif d_ego_to_target > 0 and d_target_to_ego <= 0:
+                    omega = self.omega_ego
+                else:
+                    omega = self.omega_angr
+
+                # ③ カテゴリ係数 (mu)
+                mu = self.class_mu_table.get(class_type, 1.0)
+
+                # ④ 縦方向（接近速度）の増幅因子 (alpha)
+                v_rel = ego_vel - true_vel
+                s_i = max(0.0, np.dot(v_rel, r_hat))
+                alpha = np.exp(self.kappa * s_i)
+
+                # ⑤ 横方向（進路逸れ）の減衰因子 (beta)
+                v_rel_norm_sq = np.sum(v_rel ** 2)
+                if v_rel_norm_sq > 1e-6:
+                    cross_prod = np.cross(v_rel, r_hat)
+                    cross_prod_norm_sq = np.sum(cross_prod ** 2)
+                    sin2_theta = cross_prod_norm_sq / (v_rel_norm_sq + self.epsilon)
+                else:
+                    sin2_theta = 0.0
+                
+                beta = np.exp(-self.lambda_val * sin2_theta)
+
+                # 知覚リスク R_perceived^t の計算
+                numerator = omega * mu * alpha * beta
+                denominator = r_hat_sq + self.epsilon
+                r_perceived = self.K * (numerator / denominator) + self.C
+
+            # 最も危険度が高いアクターの更新
+            if r_perceived > max_r_perceived:
+                max_r_perceived = r_perceived
+                worst_obstacle = class_type
+                worst_gt_dist = distance_gt
+                worst_yolo_dist = yolo_dist
+
+            details.append({
+                'class': class_type,
+                'gt_distance': distance_gt,
+                'yolo_distance': yolo_dist,
+                'r_perceived': r_perceived
+            })
+
+        debug_info = {
+            'worst_obstacle': worst_obstacle,
+            'worst_gt_distance': worst_gt_dist,
+            'worst_yolo_distance': worst_yolo_dist,
+            'details': details
+        }
+
+        return max_r_perceived, debug_info
+
 if __name__ == '__main__':
-    # 単体テスト
+    # 1. 既存の RiskCalculator のテスト
+    print("Testing existing RiskCalculator...")
     calc = RiskCalculator()
     
-    # 複数オブジェクトのテスト
     gt_obs = [
         {'class': 'pedestrian', 'pos': [10.0, 0, 0], 'vel': [0, 0, 0], 'mu': 1.8},
         {'class': 'car', 'pos': [25.0, 0, 0], 'vel': [10.0, 0, 0], 'mu': 1.0},
@@ -221,7 +351,6 @@ if __name__ == '__main__':
     detections = [
         {'class': 'pedestrian', 'z_distance': 10.0, 'traffic_light_color': None},
         {'class': 'car', 'z_distance': 25.0, 'traffic_light_color': None},
-        # 信号機が緑と誤検出された場合
         {'class': 'traffic_light', 'z_distance': 20.0, 'traffic_light_color': 'green'}
     ]
     
@@ -232,3 +361,32 @@ if __name__ == '__main__':
     print(f"Multi risk calculation with Red Light Misclassification:")
     print(f"  Perceived Risk: {r_perc:.2f}, GT Risk: {r_gt:.2f}, Gap Score: {gap:.2f}")
     print(f"  Worst Obstacle: {info['worst_obstacle']}")
+
+    # 2. 新しい PerceivedRiskCalculator のテスト
+    print("\nTesting new PerceivedRiskCalculator...")
+    new_calc = PerceivedRiskCalculator()
+    
+    targets_data = [
+        {
+            'true_pos': (10.0, 0.0, 0.0),
+            'true_vel': (0.0, 0.0, 0.0),
+            'class_type': 'pedestrian',
+            'yolo3d_rel_pos': (10.0, 0.0, 0.0)
+        },
+        {
+            'true_pos': (25.0, 0.0, 0.0),
+            'true_vel': (-10.0, 0.0, 0.0), # 接近中
+            'class_type': 'car',
+            'yolo3d_rel_pos': (30.0, 0.0, 0.0) # 距離過大評価
+        }
+    ]
+    
+    r_t, dbg = new_calc.compute_frame_risk(
+        ego_pos=(0.0, 0.0, 0.0),
+        ego_vel=(13.8, 0.0, 0.0),
+        targets_data=targets_data
+    )
+    print(f"Frame Risk (r_t): {r_t:.4f}")
+    print(f"Worst Obstacle: {dbg['worst_obstacle']}")
+    print(f"Worst GT Distance: {dbg['worst_gt_distance']:.2f}m")
+    print(f"Worst YOLO Distance: {dbg['worst_yolo_distance']:.2f}m")
