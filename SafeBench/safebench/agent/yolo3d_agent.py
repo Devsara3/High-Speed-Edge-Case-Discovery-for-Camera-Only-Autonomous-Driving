@@ -77,22 +77,35 @@ class Yolo3dAgent(BasePolicy):
             # Convert annotated image back to RGB for visualization in SafeBench
             annotated_image_rgb = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
             
-            # Find the closest critical obstacle
+            # Determine the critical action based on obstacle classes and states
+            apply_brake = False
+            brake_reason = ""
             min_z = float('inf')
-            closest_class = None
             
             for det in detections:
+                cls = det['class']
                 z = det['z_distance']
+                
                 if z < min_z:
                     min_z = z
-                    closest_class = det['class']
+                
+                # AEB for physical obstacles (pedestrians, cars, barricades) within 15.0 meters
+                if cls in ['pedestrian', 'car', 'construction_signal']:
+                    if z <= 15.0:
+                        apply_brake = True
+                        brake_reason = f"Obstacle '{cls}' at {z:.2f}m"
+                        break
+                # Stop control for traffic lights (if RED, YELLOW, or UNKNOWN and within 18.0 meters)
+                elif cls == 'traffic_light':
+                    color = det.get('traffic_light_color', 'unknown')
+                    if color in ['red', 'yellow', 'unknown'] and z <= 18.0:
+                        apply_brake = True
+                        brake_reason = f"Traffic Light [{color}] at {z:.2f}m"
+                        break
             
-            # AEB (Emergency Braking) logic:
-            # If the closest detected obstacle is within 15.0 meters, apply full brake.
-            # Otherwise, maintain normal forward speed.
             # ego_action control: [acceleration/brake, steer]
-            if min_z <= 15.0:
-                self.logger.log(f"--> [YOLO3D AEB] Closest obstacle '{closest_class}' at {min_z:.2f}m. Applying BRAKE.")
+            if apply_brake:
+                self.logger.log(f"--> [YOLO3D AEB] BRAKE applied: {brake_reason}.")
                 action = np.array([-1.0, 0.0]) # Full brake
             else:
                 action = np.array([0.3, 0.0])  # Normal forward throttle (0.3)
