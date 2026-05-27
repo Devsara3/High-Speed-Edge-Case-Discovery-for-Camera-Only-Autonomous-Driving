@@ -102,16 +102,19 @@ class RiskCalculator:
     def calculate_multi_risk(self, ego_pos, ego_vel, gt_obstacles, yolo_detections):
         """
         複数のオブジェクトに対して、個別に知覚リスクと物理リスクを計算し、
-        最大値（最もクリティカルなリスク）を選択して統合します。
+        アクターごとの知覚ギャップ（r_gt - r_perceived）の最大値を選択して統合します。
         
         :param ego_pos: 自車位置 [x, y, z]
         :param ego_vel: 自車速度 [vx, vy, vz]
         :param gt_obstacles: 真値の障害物リスト [{'class':..., 'pos':..., 'vel':..., 'mu':...}, ...]
-        :param yolo_detections: YOLOの検出結果リスト [{'class':..., 'z_distance':..., 'traffic_light_color':...}, ...]
+        :param yolo_detections: YOLOの検出結果リスト [{'class':..., 'z_distance':..., 'yolo3d_rel_pos':..., 'traffic_light_color':...}, ...]
         """
         max_r_perceived = 0.0
         max_r_gt = 0.0
-        worst_obstacle_name = None
+        max_gap = -float('inf')
+        worst_obstacle_name = 'unknown'
+        worst_gt_dist = 0.0
+        worst_yolo_dist = float('inf')
         per_obstacle_results = []
         
         remaining_detections = list(yolo_detections)
@@ -150,7 +153,7 @@ class RiskCalculator:
             detected_color = None
             if best_match is not None:
                 yolo_z = best_match['z_distance']
-                detected_color = best_match['traffic_light_color']
+                detected_color = best_match.get('traffic_light_color')
                 remaining_detections.pop(best_match_idx)
                 
             # 信号機ペナルティルール
@@ -161,7 +164,7 @@ class RiskCalculator:
                     yolo_z = float('inf')
             
             # 各障害物のリスク算出
-            r_perceived, debug_info = self.calculate_risk(
+            r_perceived, _ = self.calculate_risk(
                 ego_pos, ego_vel, gt_pos, gt_vel, gt_class, yolo_z
             )
             
@@ -174,11 +177,20 @@ class RiskCalculator:
             r_perceived_scaled = r_perceived * (gt['mu'] / self.class_mu_table.get(gt_class, 1.0))
             r_gt_scaled = r_gt * (gt['mu'] / self.class_mu_table.get(gt_class, 1.0))
             
+            # アクター個別のギャップ計算
+            gap_i = r_gt_scaled - r_perceived_scaled
+            
             if r_perceived_scaled > max_r_perceived:
                 max_r_perceived = r_perceived_scaled
-                worst_obstacle_name = gt_class
             if r_gt_scaled > max_r_gt:
                 max_r_gt = r_gt_scaled
+                
+            # 最大ギャップ（最悪の見落としリスク）に基づいて最悪障害物を更新
+            if gap_i > max_gap:
+                max_gap = gap_i
+                worst_obstacle_name = gt_class
+                worst_gt_dist = gt_dist
+                worst_yolo_dist = yolo_z
                 
             per_obstacle_results.append({
                 'class': gt_class,
@@ -186,21 +198,14 @@ class RiskCalculator:
                 'yolo_distance': yolo_z,
                 'r_gt': r_gt_scaled,
                 'r_perceived': r_perceived_scaled,
-                'perception_gap': r_gt_scaled - r_perceived_scaled
+                'perception_gap': gap_i
             })
             
-        # 最悪障害物の物理的な距離情報を抽出
-        worst_gt_dist = 0.0
-        worst_yolo_dist = float('inf')
-        for res in per_obstacle_results:
-            if res['class'] == worst_obstacle_name:
-                worst_gt_dist = res['gt_distance']
-                worst_yolo_dist = res['yolo_distance']
-                break
-
-        perception_gap = max_r_gt - max_r_perceived
-        
-        return max_r_perceived, max_r_gt, perception_gap, {
+        # もし障害物が何もない場合の安全ガード
+        if max_gap == -float('inf'):
+            max_gap = 0.0
+            
+        return max_r_perceived, max_r_gt, max_gap, {
             'worst_obstacle': worst_obstacle_name,
             'worst_gt_distance': worst_gt_dist,
             'worst_yolo_distance': worst_yolo_dist,

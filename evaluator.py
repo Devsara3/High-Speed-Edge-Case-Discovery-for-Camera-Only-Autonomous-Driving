@@ -104,6 +104,14 @@ class YoloEvaluator:
         
         annotated_frame = processed_image.copy() if return_image else None
         
+        # カメラパラメータの動的計算 (CARLAの視野角FOV=110度を想定)
+        img_width = float(processed_image.shape[1])
+        img_height = float(processed_image.shape[0])
+        fov_rad = np.radians(110.0)
+        focal_length = img_width / (2.0 * np.tan(fov_rad / 2.0))
+        c_x = img_width / 2.0
+        c_y = img_height / 2.0
+        
         for r in results:
             boxes = r.boxes
             for box in boxes:
@@ -140,7 +148,6 @@ class YoloEvaluator:
                             z_dist = float('inf')
                     else:
                         w_pixel = float(box.xywh[0][2])
-                        focal_length = 800.0
                         
                         # 1. ピンホール幅モデルによる距離推定 (z_dist_width)
                         real_width = 1.8
@@ -161,8 +168,6 @@ class YoloEvaluator:
                         H_cam = 1.4
                         pitch_rad = np.radians(-5.0)
                         
-                        # 画像の高さから垂直中心座標を算出
-                        c_y = processed_image.shape[0] / 2.0
                         y2_val = float(y2)
                         
                         # 俯角 phi の計算 (画像中心からの偏角 + カメラピッチ角)
@@ -187,13 +192,24 @@ class YoloEvaluator:
                             elif np.isinf(z_dist_ground) or z_dist_ground > 150.0 or z_dist_ground < 1.0:
                                 z_dist = z_dist_width
                             else:
-                                # 両方とも妥当な値の場合は、重み付け平均 (日中の幅縮小エラーを緩和するため接地面の重みを高く設定)
+                                # 両方とも妥当な値の場合は、重み付け平均
                                 z_dist = 0.4 * z_dist_width + 0.6 * z_dist_ground
                             
+                    # 逆投影によるカメラ座標基準の相対3D座標 [X, Y, Z] の算出
+                    if not np.isinf(z_dist):
+                        u_c = float(box.xywh[0][0])
+                        v_c = float(box.xywh[0][1])
+                        x_pred = (u_c - c_x) * z_dist / focal_length
+                        y_pred = (v_c - c_y) * z_dist / focal_length
+                        yolo3d_rel_pos = [x_pred, y_pred, z_dist]
+                    else:
+                        yolo3d_rel_pos = None
+
                     detections.append({
                         'class': class_name,
                         'confidence': conf,
                         'z_distance': z_dist,
+                        'yolo3d_rel_pos': yolo3d_rel_pos,
                         'traffic_light_color': tl_color,
                         'bbox': (x1, y1, x2, y2)
                     })

@@ -387,27 +387,92 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE', traffic_light_c
             env.set_weather(sun_altitude_angle, precipitation, fog_density)
             env.set_traffic_light_color(traffic_light_color)
             
-            # 近接動作を安定させるため同期モードで15Tick進行
-            for _ in range(15):
-                env.get_image()
+            max_run_gap = -float('inf')
+            worst_run_info = {
+                'worst_obstacle': 'unknown',
+                'worst_yolo_distance': float('inf'),
+                'worst_gt_distance': 0.0,
+                'r_gt': 0.0,
+                'r_perceived': 0.0
+            }
+            collision_detected = False
             
-            # 最新カメラ画像の取得
-            img = env.get_image()
-            gt = env.get_ground_truth()
+            # 初期位置の記録
+            init_loc = env.ego_vehicle.get_location()
+            max_steps = 200  # 最大走行ステップ数 (約10秒)
             
-            # RGBの推論とリスク評価
-            detections, annotated = evaluator.evaluate_multi(img, return_image=True)
-            r_perc, r_gt, gap, info = risk_calculator.calculate_multi_risk(
-                ego_pos=gt['ego_pos'], ego_vel=gt['ego_vel'],
-                gt_obstacles=gt['obstacles'], yolo_detections=detections
-            )
-            
-            if gap > worst_gap:
-                worst_gap = gap
-                cv2.imwrite(f"results/real_edge_case_worst_{sampler_name}_{traffic_light_color}.jpg", annotated)
-                print(f"--> [NEW WORST CARLA EDGE CASE] Gap Score: {gap:.4f}")
-                print(f"    Params: Sun={sun_altitude_angle:.2f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}")
+            for step in range(max_steps):
+                # 1. 最新カメラ画像の取得と YOLO 推論
+                img = env.get_image()
+                detections, annotated = evaluator.evaluate_multi(img, return_image=True)
+                gt = env.get_ground_truth()
                 
+                # 2. YOLO3D 認識結果に基づくAEBの制御
+                apply_brake = False
+                for det in detections:
+                    cls = det['class']
+                    z = det['z_distance']
+                    
+                    if cls in ['pedestrian', 'car', 'construction_signal']:
+                        if z <= 15.0:
+                            apply_brake = True
+                            break
+                    elif cls == 'traffic_light':
+                        color = det.get('traffic_light_color', 'unknown')
+                        if color in ['red', 'yellow', 'unknown'] and z <= 18.0:
+                            apply_brake = True
+                            break
+                
+                # 制御コマンドの適用
+                if apply_brake:
+                    control = carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0)
+                else:
+                    control = carla.VehicleControl(throttle=0.3, steer=0.0, brake=0.0)
+                env.ego_vehicle.apply_control(control)
+                
+                # 3. リスク・ギャップ計算
+                r_perc, r_gt, gap, info = risk_calculator.calculate_multi_risk(
+                    ego_pos=gt['ego_pos'], ego_vel=gt['ego_vel'],
+                    gt_obstacles=gt['obstacles'], yolo_detections=detections
+                )
+                
+                # 走行時系列全体の最悪瞬間を記録
+                if gap > max_run_gap:
+                    max_run_gap = gap
+                    worst_run_info = {
+                        'worst_obstacle': info['worst_obstacle'],
+                        'worst_yolo_distance': info['worst_yolo_distance'],
+                        'worst_gt_distance': info['worst_gt_distance'],
+                        'r_gt': r_gt,
+                        'r_perceived': r_perc,
+                        'annotated_image': annotated
+                    }
+                
+                # 衝突判定 (信号機以外のアクターとの距離が 2.0m 未満)
+                for obs in gt['obstacles']:
+                    if obs['class'] != 'traffic_light':
+                        dist = np.linalg.norm(np.array(obs['pos'][:2]) - np.array(gt['ego_pos'][:2]))
+                        if dist < 2.0:
+                            collision_detected = True
+                            break
+                
+                if collision_detected:
+                    break
+                
+                # 完走判定 (初期位置から 45.0m 前進したら完走)
+                curr_loc = env.ego_vehicle.get_location()
+                dist_traveled = curr_loc.distance(init_loc)
+                if dist_traveled >= 45.0:
+                    break
+            
+            # 最悪画像の保存
+            if max_run_gap > worst_gap:
+                worst_gap = max_run_gap
+                if 'annotated_image' in worst_run_info:
+                    cv2.imwrite(f"results/real_edge_case_worst_{sampler_name}_{traffic_light_color}.jpg", worst_run_info['annotated_image'])
+                    print(f"--> [NEW WORST REAL CARLA EDGE CASE] Gap Score: {max_run_gap:.4f} (Obstacle: {worst_run_info['worst_obstacle']})")
+                    print(f"    Params: Sun={sun_altitude_angle:.2f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}")
+            
             elapsed_time = time.time() - start_time
             
             history.append({
@@ -416,16 +481,17 @@ def run_real_carla_optimization(n_trials=30, sampler_name='TPE', traffic_light_c
                 "precipitation": precipitation,
                 "fog_density": fog_density,
                 "traffic_light_color": traffic_light_color,
-                "yolo_z_distance": info['worst_yolo_distance'],
-                "gt_distance": info['worst_gt_distance'],
-                "r_gt": r_gt,
-                "r_perceived": r_perc,
-                "gap": gap,
-                "worst_obstacle": info['worst_obstacle'],
+                "yolo_z_distance": worst_run_info['worst_yolo_distance'],
+                "gt_distance": worst_run_info['worst_gt_distance'],
+                "r_gt": worst_run_info['r_gt'],
+                "r_perceived": worst_run_info['r_perceived'],
+                "gap": max_run_gap,
+                "worst_obstacle": worst_run_info['worst_obstacle'],
+                "collision": collision_detected,
                 "elapsed_time_sec": elapsed_time
             })
             
-            return gap
+            return max_run_gap
 
         study.optimize(objective, n_trials=n_trials)
         
