@@ -268,6 +268,22 @@ class CameraOnlyExperiment:
         
         # 最初のステップのために、最初の world.tick() を呼んでおく
         self.next_frame_id = self.world.tick()
+        
+        # 旁观者视角：车尾后上方
+        self._update_spectator()
+
+    def _update_spectator(self):
+        if not hasattr(self, 'ego_vehicle') or self.ego_vehicle is None:
+            return
+        ego_tf = self.ego_vehicle.get_transform()
+        fwd = ego_tf.get_forward_vector()
+        spec_loc = carla.Location(
+            x=ego_tf.location.x - fwd.x * 12.0,
+            y=ego_tf.location.y - fwd.y * 12.0,
+            z=ego_tf.location.z + 8.0
+        )
+        spec_rot = carla.Rotation(pitch=-20.0, yaw=ego_tf.rotation.yaw, roll=0.0)
+        self.world.get_spectator().set_transform(carla.Transform(spec_loc, spec_rot))
 
     def _destroy_actors(self):
         if hasattr(self, 'camera') and self.camera is not None:
@@ -502,7 +518,17 @@ class CameraOnlyExperiment:
                 target_loc += right_vec * offset_y
                 
             # 目標座標を自車のローカル座標系に投影
-            target_local = ego_transform.inverse().transform(target_loc)
+            # 手动计算目标点在自车局部坐标系的坐标（替代 get_inverse().transform()）
+            dx = target_loc.x - ego_transform.location.x
+            dy = target_loc.y - ego_transform.location.y
+            dz = target_loc.z - ego_transform.location.z
+            fwd = ego_transform.get_forward_vector()
+            right = ego_transform.get_right_vector()
+            up = ego_transform.get_up_vector()
+            local_x = dx * fwd.x + dy * fwd.y + dz * fwd.z
+            local_y = dx * right.x + dy * right.y + dz * right.z
+            local_z = dx * up.x + dy * up.y + dz * up.z
+            target_local = carla.Location(x=local_x, y=local_y, z=local_z)
             error_y = target_local.y
             
         self.integral_error_lat += error_y * dt
@@ -586,6 +612,10 @@ class CameraOnlyExperiment:
 
         if not self.demo_mode:
             self.next_frame_id = self.world.tick()
+        
+        # 每10帧更新一次旁观者视角
+        if not self.demo_mode and self.time_step % 10 == 0:
+            self._update_spectator()
 
         return log_entry
 
