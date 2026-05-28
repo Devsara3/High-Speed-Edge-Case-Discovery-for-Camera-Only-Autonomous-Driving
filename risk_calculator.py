@@ -163,13 +163,15 @@ class RiskCalculator:
                 if best_match is None or detected_color not in ['red', 'yellow']:
                     yolo_z = float('inf')
             
+            perceived_class = best_match['class'] if best_match is not None else 'unknown'
+            
             # 各障害物のリスク算出
-            r_perceived, _ = self.calculate_risk(
-                ego_pos, ego_vel, gt_pos, gt_vel, gt_class, yolo_z
+            r_perceived, perceived_debug = self.calculate_risk(
+                ego_pos, ego_vel, gt_pos, gt_vel, perceived_class, yolo_z
             )
             
             # 物理リスク (YOLOの主観距離として実際のGT距離を与える)
-            r_gt, _ = self.calculate_risk(
+            r_gt, gt_debug = self.calculate_risk(
                 ego_pos, ego_vel, gt_pos, gt_vel, gt_class, gt_dist
             )
             
@@ -191,24 +193,45 @@ class RiskCalculator:
                 worst_obstacle_name = gt_class
                 worst_gt_dist = gt_dist
                 worst_yolo_dist = yolo_z
+                worst_perceived_params = {
+                    'omega': perceived_debug['omega'],
+                    'alpha': perceived_debug['alpha'],
+                    'beta': perceived_debug['beta'],
+                    'mu': perceived_debug['mu'],
+                    'class': perceived_class
+                }
+                worst_gt_params = {
+                    'omega': gt_debug['omega'],
+                    'alpha': gt_debug['alpha'],
+                    'beta': gt_debug['beta'],
+                    'mu': gt_debug['mu'],
+                    'class': gt_class
+                }
                 
             per_obstacle_results.append({
                 'class': gt_class,
+                'perceived_class': perceived_class,
                 'gt_distance': gt_dist,
                 'yolo_distance': yolo_z,
                 'r_gt': r_gt_scaled,
                 'r_perceived': r_perceived_scaled,
-                'perception_gap': gap_i
+                'perception_gap': gap_i,
+                'perceived_params': perceived_debug,
+                'gt_params': gt_debug
             })
             
         # もし障害物が何もない場合の安全ガード
         if max_gap == -float('inf'):
             max_gap = 0.0
+            worst_perceived_params = {'omega': 0.0, 'alpha': 1.0, 'beta': 1.0, 'mu': 1.0, 'class': 'unknown'}
+            worst_gt_params = {'omega': 0.0, 'alpha': 1.0, 'beta': 1.0, 'mu': 1.0, 'class': 'unknown'}
             
         return max_r_perceived, max_r_gt, max_gap, {
             'worst_obstacle': worst_obstacle_name,
             'worst_gt_distance': worst_gt_dist,
             'worst_yolo_distance': worst_yolo_dist,
+            'worst_perceived_params': worst_perceived_params,
+            'worst_gt_params': worst_gt_params,
             'details': per_obstacle_results
         }
 
