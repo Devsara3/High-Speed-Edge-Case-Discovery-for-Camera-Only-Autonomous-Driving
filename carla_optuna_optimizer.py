@@ -113,7 +113,19 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     plt.ylabel('Precipitation')
     plt.title('Weather Vulnerability Map (Gap vs Fog/Rain)')
     plt.grid(True)
-    plt.savefig("results/vulnerability_map.png")
+    plt.savefig(f"results/vulnerability_map_{scenario_name}.png")
+    plt.close()
+    
+    # 【追加】 トライアル毎のリスク（Gap）の推移グラフ (ユーザー要望)
+    plt.figure(figsize=(12, 6))
+    plt.plot(df_history['trial'], df_history['gap'], marker='o', linestyle='-', color='red', label='Perception Gap (Risk)')
+    plt.xlabel('Trial Number')
+    plt.ylabel('Risk (Perception Gap)')
+    plt.title(f'Optuna Optimization History: Risk over Trials (Scenario {scenario_name})')
+    plt.grid(True, linestyle=':', alpha=0.7)
+    plt.legend()
+    # ユーザーの指定名に合わせて optuna_worst_XXX_history_plot に保存
+    plt.savefig(f"results/optuna_worst_{scenario_name}_history_plot.png")
     plt.close()
     
     print("\nBest Trial (Weather Edge Case):")
