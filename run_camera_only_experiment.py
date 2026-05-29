@@ -614,6 +614,13 @@ class CameraOnlyExperiment:
         # 距離推定AI(Regressor)がロードされていない場合は、強制的にPID追従を優先
         if getattr(self.evaluator, 'distance_regressor', None) is None:
             min_hazard_dist = float('inf')  # AEBを無効化して走り切らせる
+            
+        current_speed = np.linalg.norm(ego_vel) 
+        
+        # 【幽霊ブレーキ（Phantom Braking）対策】
+        # 走り出し直後（約1秒間 / 20ticks）は、悪天候ノイズによる超近距離の誤検知を無視し、発進を優先する
+        if self.scenario_ticks < 20 and current_speed < 2.0:
+            min_hazard_dist = float('inf')
 
         if min_hazard_dist < 10.0:
             accel_cmd = -1.0  # フルブレーキ
