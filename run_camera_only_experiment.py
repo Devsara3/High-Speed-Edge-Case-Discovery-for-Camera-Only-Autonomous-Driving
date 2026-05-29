@@ -561,6 +561,12 @@ class CameraOnlyExperiment:
                     
         # 2-A. Longitudinal AEB 制御
         target_v = target_speed_kph / 3.6
+        
+        # データ収集用など、AIが未学習でフォールバックが誤作動する場合はブレーキを無視する(最低限の安全装置のみ)
+        # 距離推定AI(Regressor)がロードされていない場合は、強制的にPID追従を優先
+        if getattr(self.evaluator, 'distance_regressor', None) is None:
+            min_hazard_dist = float('inf')  # AEBを無効化して走り切らせる
+
         if min_hazard_dist < 10.0:
             accel_cmd = -1.0  # フルブレーキ
             print(f"[AEB ACTIVE] Hazard detected! Estimated Distance: {min_hazard_dist:.2f}m. Full Braking.")
@@ -568,7 +574,9 @@ class CameraOnlyExperiment:
             accel_cmd = -0.3  # 警告減速
         else:
             # 通常速度追従 (PID)
-            error_v = target_v - ego_vel[0]
+            # CARLAでは前進速度はローカルのX軸成分を使うべきだが、ego_velはワールド座標の場合があるため速度ノルムを使用
+            current_speed = np.linalg.norm(ego_vel) 
+            error_v = target_v - current_speed
             accel_cmd = self.kp_long * error_v + self.kd_long * (error_v - self.prev_error_long) / dt
             self.prev_error_long = error_v
             accel_cmd = np.clip(accel_cmd, -1.0, 1.0)
