@@ -951,9 +951,19 @@ class CameraOnlyExperiment:
                             self.target_actor.destroy()
                         lead_bp = self.blueprint_library.filter('model3')[0]
                         ego_transform = self.ego_vehicle.get_transform()
-                        lead_loc = ego_transform.location + ego_transform.get_forward_vector() * 20.0
-                        lead_loc.z += 0.5
-                        lead_transform = carla.Transform(lead_loc, ego_transform.rotation)
+                        # 使用车道waypoint确保spawn位置在道路上（绕锥桶后车可能偏出路外）
+                        carla_map = self.world.get_map()
+                        lane_wp = carla_map.get_waypoint(ego_transform.location, project_to_road=True, lane_type=carla.LaneType.Driving)
+                        waypoints_ahead = lane_wp.next(20.0)
+                        if waypoints_ahead:
+                            lead_loc = waypoints_ahead[0].transform.location
+                            lead_loc.z += 0.5
+                            lead_rot = waypoints_ahead[0].transform.rotation
+                        else:
+                            lead_loc = ego_transform.location + ego_transform.get_forward_vector() * 20.0
+                            lead_loc.z += 0.5
+                            lead_rot = ego_transform.rotation
+                        lead_transform = carla.Transform(lead_loc, lead_rot)
                         self.target_actor = self.world.spawn_actor(lead_bp, lead_transform)
                         self.target_actor.set_target_velocity(carla.Vector3D(ego_vel_x, 0.0, 0.0))
                         self.actors.append(self.target_actor)
@@ -1003,7 +1013,6 @@ class CameraOnlyExperiment:
                             target_rot = carla.Rotation(pitch=ego_transform.rotation.pitch,
                                                         yaw=ego_transform.rotation.yaw + 180.0,
                                                         roll=ego_transform.rotation.roll)
-                                                        
                         target_transform = carla.Transform(target_loc, target_rot)
                         
                         # 衝突によるスポーン失敗を防ぐため try_spawn_actor を使用

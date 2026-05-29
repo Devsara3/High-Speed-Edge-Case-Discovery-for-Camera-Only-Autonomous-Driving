@@ -58,9 +58,10 @@ def collect_training_data(demo_mode=True, host='localhost', port=2000, target_sa
             # シーケンスを1周走らせる
             experiment.run_sequence()
             
-            # モックの場合に無限ループやスタックを防ぐ安全弁
-            if demo_mode and loop_count >= 5:
-                print("[INFO] Reached max mock loop limit for safety.")
+            # 无限ループ防止安全弁（mock/real共用）
+            max_loops = 5 if demo_mode else 200
+            if loop_count >= max_loops:
+                print(f"[INFO] Reached max loop limit ({max_loops}) for safety.")
                 break
                 
     finally:
