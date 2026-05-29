@@ -279,6 +279,22 @@ class CameraOnlyExperiment:
             self.actors.append(self.target_actor)
 
         elif name == 'E':
+            # 【チーム修正用 TODO】 本物の交差点と信号機を使うロジック
+            # 現在は空中にダミーのバリケードを置いていますが、YOLOはこれを信号機として認識しません。
+            # 以下の手順で本物の交差点をセットアップしてください。
+            
+            # 1. CARLAエディタで良さそうな交差点の手前の座標を調べ、ここに直接ハードコードする
+            # ego_loc = carla.Location(x=100.0, y=50.0, z=0.5)
+            # ego_transform = carla.Transform(ego_loc, carla.Rotation(yaw=90.0))
+            
+            # 2. 目の前にある本物の信号機アクターを取得し、赤色に固定(フリーズ)させる
+            # traffic_lights = self.world.get_actors().filter('traffic.traffic_light')
+            # target_tl = ... (距離計算などで一番近いものを選ぶ)
+            # target_tl.set_state(carla.TrafficLightState.Red)
+            # target_tl.freeze(True)
+            # self.target_actor = target_tl
+            
+            # 3. 以下のダミーバリケード生成コードは削除してください。
             barrier_bp = self.blueprint_library.find('static.prop.streetbarrier')
             barrier_loc = ego_transform.location + fwd * 35.0
             barrier_loc.z += 2.0
@@ -506,6 +522,17 @@ class CameraOnlyExperiment:
                     v_lead = self.target_actor.get_velocity()
                     new_vx = max(0.0, v_lead.x + self.lead_deceleration * dt)
                     self.target_actor.set_target_velocity(carla.Vector3D(new_vx, v_lead.y, v_lead.z))
+                    
+            elif scenario_name == 'C':
+                # 【チーム修正用 TODO】 対向車（右直事故・割り込み）の挙動ロジック
+                # 現在はただ直進（約40km/h）してくるだけの仮実装になっています。
+                # 衝突のタイミングを見計らって、急にハンドルを切ってエゴ車両の前に割り込むロジックを実装してください。
+                if self.target_actor is not None and self.target_actor.is_alive:
+                    fwd_vec = self.target_actor.get_transform().get_forward_vector()
+                    # とりあえず一定速度で直進させる
+                    speed = 11.11 
+                    self.target_actor.set_target_velocity(carla.Vector3D(fwd_vec.x * speed, fwd_vec.y * speed, fwd_vec.z * speed))
+                    # TODO: 自車との距離(travel_dist等)を判定し、VehicleControl(steer=1.0) を適用して強引に右折/左折させる処理を追加。
             
             yolo_detections = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
             
