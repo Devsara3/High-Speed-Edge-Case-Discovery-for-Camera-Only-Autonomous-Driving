@@ -188,10 +188,36 @@ class CameraOnlyExperiment:
         self.worst_case_image = None
         self.worst_case_step = 0
         
-        # 1. 自車のスポーン
-        ego_bp = self.blueprint_library.filter('model3')[0]
         spawn_points = self.world.get_map().get_spawn_points()
         ego_transform = spawn_points[0]
+        target_tl = None
+        
+        # Scenario E の場合、事前に信号機がある交差点の手前のスポーンポイントを探す
+        if name == 'E':
+            best_spawn = spawn_points[0]
+            for sp in spawn_points:
+                wp = self.world.get_map().get_waypoint(sp.location)
+                found = False
+                for _ in range(20): # 最大40m前方を探索
+                    next_wps = wp.next(2.0)
+                    if not next_wps:
+                        break
+                    wp = next_wps[0]
+                    # 前方のwaypoint周辺(15m以内)に信号機があるかチェック
+                    for tl in self.world.get_actors().filter('traffic.traffic_light'):
+                        if tl.get_location().distance(wp.transform.location) < 15.0:
+                            best_spawn = sp
+                            target_tl = tl
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+            ego_transform = best_spawn
+        
+        # 1. 自車のスポーン
+        ego_bp = self.blueprint_library.filter('model3')[0]
         ego_transform.location.z += 0.5
         self.ego_vehicle = self.world.spawn_actor(ego_bp, ego_transform)
         self.actors.append(self.ego_vehicle)
@@ -279,28 +305,18 @@ class CameraOnlyExperiment:
             self.actors.append(self.target_actor)
 
         elif name == 'E':
-            # 【チーム修正用 TODO】 本物の交差点と信号機を使うロジック
-            # 現在は空中にダミーのバリケードを置いていますが、YOLOはこれを信号機として認識しません。
-            # 以下の手順で本物の交差点をセットアップしてください。
-            
-            # 1. CARLAエディタで良さそうな交差点の手前の座標を調べ、ここに直接ハードコードする
-            # ego_loc = carla.Location(x=100.0, y=50.0, z=0.5)
-            # ego_transform = carla.Transform(ego_loc, carla.Rotation(yaw=90.0))
-            
-            # 2. 目の前にある本物の信号機アクターを取得し、赤色に固定(フリーズ)させる
-            # traffic_lights = self.world.get_actors().filter('traffic.traffic_light')
-            # target_tl = ... (距離計算などで一番近いものを選ぶ)
-            # target_tl.set_state(carla.TrafficLightState.Red)
-            # target_tl.freeze(True)
-            # self.target_actor = target_tl
-            
-            # 3. 以下のダミーバリケード生成コードは削除してください。
-            barrier_bp = self.blueprint_library.find('static.prop.streetbarrier')
-            barrier_loc = ego_transform.location + fwd * 35.0
-            barrier_loc.z += 2.0
-            barrier_transform = carla.Transform(barrier_loc, ego_transform.rotation)
-            self.target_actor = self.world.spawn_actor(barrier_bp, barrier_transform)
-            self.actors.append(self.target_actor)
+            if target_tl:
+                target_tl.set_state(carla.TrafficLightState.Red)
+                target_tl.freeze(True)
+                self.target_actor = target_tl
+            else:
+                print("[WARNING] Could not find a valid traffic light for Scenario E. Using dummy fallback.")
+                barrier_bp = self.blueprint_library.find('static.prop.streetbarrier')
+                barrier_loc = ego_transform.location + fwd * 35.0
+                barrier_loc.z += 2.0
+                barrier_transform = carla.Transform(barrier_loc, ego_transform.rotation)
+                self.target_actor = self.world.spawn_actor(barrier_bp, barrier_transform)
+                self.actors.append(self.target_actor)
 
         # 初期馴染ませ用tick
         for _ in range(5):
@@ -524,15 +540,28 @@ class CameraOnlyExperiment:
                     self.target_actor.set_target_velocity(carla.Vector3D(new_vx, v_lead.y, v_lead.z))
                     
             elif scenario_name == 'C':
-                # 【チーム修正用 TODO】 対向車（右直事故・割り込み）の挙動ロジック
-                # 現在はただ直進（約40km/h）してくるだけの仮実装になっています。
-                # 衝突のタイミングを見計らって、急にハンドルを切ってエゴ車両の前に割り込むロジックを実装してください。
                 if self.target_actor is not None and self.target_actor.is_alive:
-                    fwd_vec = self.target_actor.get_transform().get_forward_vector()
-                    # とりあえず一定速度で直進させる
+                    ego_tf = self.ego_vehicle.get_transform()
+                    target_tf = self.target_actor.get_transform()
+                    dist_to_target = ego_tf.location.distance(target_tf.location)
+                    
                     speed = 11.11 
-                    self.target_actor.set_target_velocity(carla.Vector3D(fwd_vec.x * speed, fwd_vec.y * speed, fwd_vec.z * speed))
-                    # TODO: 自車との距離(travel_dist等)を判定し、VehicleControl(steer=1.0) を適用して強引に右折/左折させる処理を追加。
+                    fwd_vec = target_tf.get_forward_vector()
+                    
+                    # 距離が15m以下になったら、進行方向ベクトルに右方向ベクトルを足して強引に右折させる
+                    if dist_to_target < 15.0:
+                        right_vec = target_tf.get_right_vector()
+                        # 前方と右方をブレンドして斜めの速度ベクトルにする
+                        new_dir = carla.Vector3D(fwd_vec.x + right_vec.x * 0.7, 
+                                                 fwd_vec.y + right_vec.y * 0.7, 
+                                                 fwd_vec.z + right_vec.z * 0.7)
+                        norm = (new_dir.x**2 + new_dir.y**2 + new_dir.z**2)**0.5
+                        vel = carla.Vector3D(new_dir.x/norm * speed, new_dir.y/norm * speed, new_dir.z/norm * speed)
+                        self.target_actor.set_target_velocity(vel)
+                        # 見た目の回転も加える
+                        self.target_actor.set_target_angular_velocity(carla.Vector3D(0, 0, 30.0))
+                    else:
+                        self.target_actor.set_target_velocity(carla.Vector3D(fwd_vec.x * speed, fwd_vec.y * speed, fwd_vec.z * speed))
             
             yolo_detections = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
             
