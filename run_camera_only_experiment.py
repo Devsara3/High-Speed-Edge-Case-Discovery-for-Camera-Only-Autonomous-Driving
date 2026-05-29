@@ -30,9 +30,13 @@ class CameraOnlyExperiment:
         self.evaluator = YoloEvaluator()
         self.risk_calculator = RiskCalculator()
         self.log_data = []
+        self.training_data = []
         self.time_step = 0
         self.current_scenario = None
         self.clear_flag = False
+        
+        self.scenario_min_distance = float('inf')
+        self.scenario_collisions = 0
         
         # シナリオ固有の進行管理変数
         self.scenario_start_x = 0.0
@@ -91,6 +95,10 @@ class CameraOnlyExperiment:
         self.scenario_start_x = 0.0
         self.clear_flag = False
         self.current_scenario = name
+        self._collision_registered_this_scenario = False
+        self.max_gap_this_run = -float('inf')
+        self.worst_case_image = None
+        self.worst_case_step = 0
         
         # Ego初期位置・速度設定
         v_ego = (ego_speed_kph / 3.6)
@@ -153,6 +161,17 @@ class CameraOnlyExperiment:
                 'mu': 1.5
             }]
             print(f"[Scenario D Setup] Ego Speed: {ego_speed_kph} km/h. Construction barrier at X=35m")
+            
+        elif name == 'E':
+            # シナリオE (RLI: 赤信号交差点)
+            self.mock_env.obstacles = [{
+                'class': 'traffic_light',
+                'pos': [35.0, 0.0, 0.0], # X=35m
+                'vel': [0.0, 0.0, 0.0],
+                'color': 'red',
+                'mu': 2.0
+            }]
+            print(f"[Scenario E Setup] Ego Speed: {ego_speed_kph} km/h. Red Traffic Light at X=35m")
 
     def _setup_real_scenario(self, name, ego_speed_kph, gap=12.0, deceleration=-6.0):
         """
@@ -164,6 +183,10 @@ class CameraOnlyExperiment:
         self.scenario_ticks = 0
         self.clear_flag = False
         self.current_scenario = name
+        self._collision_registered_this_scenario = False
+        self.max_gap_this_run = -float('inf')
+        self.worst_case_image = None
+        self.worst_case_step = 0
         
         # 1. 自車のスポーン
         ego_bp = self.blueprint_library.filter('model3')[0]
@@ -255,6 +278,14 @@ class CameraOnlyExperiment:
             self.target_actor = self.world.spawn_actor(barrier_bp, barrier_transform)
             self.actors.append(self.target_actor)
 
+        elif name == 'E':
+            barrier_bp = self.blueprint_library.find('static.prop.streetbarrier')
+            barrier_loc = ego_transform.location + fwd * 35.0
+            barrier_loc.z += 2.0
+            barrier_transform = carla.Transform(barrier_loc, ego_transform.rotation)
+            self.target_actor = self.world.spawn_actor(barrier_bp, barrier_transform)
+            self.actors.append(self.target_actor)
+
         # 初期馴染ませ用tick
         for _ in range(5):
             self.world.tick()
@@ -341,10 +372,16 @@ class CameraOnlyExperiment:
             precip = self.mock_env.precipitation
             
             image = self.mock_env.get_image()
-            _ = self.evaluator.evaluate_multi(image)
+            _ = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
             
             # 幾何学座標に基づき、天候の影響を適用した認識結果を生成
             yolo_detections = []
+            img_width = 1280.0
+            img_height = 720.0
+            fov_rad = np.radians(110.0)
+            focal_length = img_width / (2.0 * np.tan(fov_rad / 2.0))
+            c_y = img_height / 2.0
+            
             for obs in self.mock_env.obstacles:
                 obs_class = obs['class']
                 obs_pos = np.array(obs['pos'], dtype=float)
@@ -362,6 +399,9 @@ class CameraOnlyExperiment:
                         yolo_z = float('inf')
                         yolo_rel_pos = None
                         detected_color = None
+                        y_bottom = 0.0
+                        height_norm = 0.0
+                        width_norm = 0.0
                     else:
                         x_pred = rel_pos[1]
                         y_pred = rel_pos[2] - 1.4
@@ -383,12 +423,38 @@ class CameraOnlyExperiment:
                             if detected_color in ['red', 'yellow'] and np.random.rand() > visibility:
                                 detected_color = 'green'
                                 
+                        # 幾何学的にBBoxサイズと位置を逆算（モック用データ収集のため）
+                        real_w = 1.8
+                        real_h = 1.5
+                        if obs_class == 'pedestrian':
+                            real_w = 0.5
+                            real_h = 1.7
+                        elif obs_class == 'construction_signal':
+                            real_w = 0.8
+                            real_h = 0.9
+                            
+                        w_pix = (focal_length * real_w) / yolo_z
+                        h_pix = (focal_length * real_h) / yolo_z
+                        
+                        # 接地点 Y2 の計算 (H_cam = 1.4m)
+                        pitch_rad = np.radians(-5.0)
+                        phi = -np.arctan(1.4 / yolo_z)
+                        ang = phi - pitch_rad
+                        y2_val = c_y + focal_length * np.tan(ang)
+                        
+                        y_bottom = np.clip(float(y2_val) / img_height, 0.0, 1.0)
+                        height_norm = np.clip(float(h_pix) / img_height, 0.0, 1.0)
+                        width_norm = np.clip(float(w_pix) / img_width, 0.0, 1.0)
+                                
                     yolo_detections.append({
                         'class': obs_class,
                         'confidence': 0.8 * visibility,
                         'z_distance': yolo_z,
                         'yolo3d_rel_pos': yolo_rel_pos,
-                        'traffic_light_color': detected_color
+                        'traffic_light_color': detected_color,
+                        'bbox_y_bottom': y_bottom,
+                        'bbox_height': height_norm,
+                        'bbox_width': width_norm
                     })
         else:
             # 1. 期待するフレームID (self.next_frame_id) の画像をキューから取得する（同期）
@@ -441,7 +507,7 @@ class CameraOnlyExperiment:
                     new_vx = max(0.0, v_lead.x + self.lead_deceleration * dt)
                     self.target_actor.set_target_velocity(carla.Vector3D(new_vx, v_lead.y, v_lead.z))
             
-            yolo_detections = self.evaluator.evaluate_multi(image)
+            yolo_detections = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
             
             gt_obstacles = []
             if self.target_actor is not None and self.target_actor.is_alive:
@@ -459,12 +525,16 @@ class CameraOnlyExperiment:
                 elif scenario_name == 'D':
                     act_class = 'construction_signal'
                     mu_val = 1.5
+                elif scenario_name == 'E':
+                    act_class = 'traffic_light'
+                    mu_val = 2.0
                     
                 gt_obstacles.append({
                     'class': act_class,
                     'pos': [t_trans.location.x, t_trans.location.y, t_trans.location.z],
                     'vel': [t_vel_vec.x, t_vel_vec.y, t_vel_vec.z],
-                    'mu': mu_val
+                    'mu': mu_val,
+                    'color': 'red' if act_class == 'traffic_light' else None
                 })
 
         # 2. カメラ認識（YOLO3D）のみに基づく走行制御（加減速・回避操舵）の計算
@@ -481,7 +551,11 @@ class CameraOnlyExperiment:
                     offset_y = 2.5
                 
                 # AEB ブレーキ判定: 自車走行レーン内 (|x_rel| < 1.8m) の前方障害物
-                if abs(x_rel) < 1.8 and z_rel < min_hazard_dist:
+                is_lane_hazard = abs(x_rel) < 1.8
+                # 信号機（赤・黄）の停止判定： 進行方向(Z)にあれば止まる
+                is_red_light = det['class'] == 'traffic_light' and det.get('traffic_light_color') in ['red', 'yellow']
+                
+                if (is_lane_hazard or is_red_light) and z_rel < min_hazard_dist:
                     min_hazard_dist = z_rel
                     closest_hazard = det
                     
@@ -560,6 +634,17 @@ class CameraOnlyExperiment:
         per_params = info['worst_perceived_params']
         gt_params = info['worst_gt_params']
         
+        if not hasattr(self, 'max_gap_this_run'):
+            self.max_gap_this_run = -float('inf')
+            self.worst_case_image = None
+            self.worst_case_step = 0
+            
+        if gap > self.max_gap_this_run:
+            self.max_gap_this_run = gap
+            if image is not None:
+                self.worst_case_image = image.copy()
+            self.worst_case_step = self.time_step
+        
         # 5. 時系列ロギング
         log_entry = {
             'step': self.time_step,
@@ -585,9 +670,67 @@ class CameraOnlyExperiment:
             'steer': steer_cmd,
             'accel': accel_cmd
         }
+        
+        # 5.5. 最小接近距離のトラッキングと衝突判定
+        if len(gt_obstacles) > 0:
+            current_min_dist = float('inf')
+            for gt in gt_obstacles:
+                if gt['class'] != 'unknown':
+                    dist = np.linalg.norm(np.array(gt['pos'], dtype=float) - np.array(ego_pos, dtype=float))
+                    if dist < current_min_dist:
+                        current_min_dist = dist
+                        
+            if current_min_dist < self.scenario_min_distance:
+                self.scenario_min_distance = current_min_dist
+                
+            if current_min_dist < 1.0:
+                if getattr(self, '_collision_registered_this_scenario', False) == False:
+                    self.scenario_collisions += 1
+                    self._collision_registered_this_scenario = True
+                    print(f"[CRASH] Collision detected! Min Distance: {current_min_dist:.2f}m")
+                    
+        log_entry['min_gt_distance'] = self.scenario_min_distance
         self.log_data.append(log_entry)
         
-        # 6. シナリオ完了クリア判定
+        # 6. 学習データの自動収集
+        if hasattr(self, 'training_data') and len(gt_obstacles) > 0:
+            for det in yolo_detections:
+                det_class = det['class']
+                if det_class in ['car', 'pedestrian', 'construction_signal', 'traffic_light']:
+                    best_gt = None
+                    min_dist_diff = float('inf')
+                    for gt in gt_obstacles:
+                        if gt['class'] == det_class:
+                            d_gt = np.linalg.norm(np.array(gt['pos'], dtype=float) - np.array(ego_pos, dtype=float))
+                            diff = abs(det['z_distance'] - d_gt)
+                            if diff < min_dist_diff and diff < 10.0:
+                                min_dist_diff = diff
+                                best_gt = d_gt
+                                
+                    if best_gt is not None:
+                        y_bot = det.get('bbox_y_bottom', 0.0)
+                        h_norm = det.get('bbox_height', 0.0)
+                        w_norm = det.get('bbox_width', 0.0)
+                        
+                        if y_bot > 0.0 and h_norm > 0.0 and w_norm > 0.0:
+                            is_ped = 1 if det_class == 'pedestrian' else 0
+                            is_car = 1 if det_class == 'car' else 0
+                            is_sig = 1 if det_class == 'construction_signal' else 0
+                            is_tl = 1 if det_class == 'traffic_light' else 0
+                            
+                            self.training_data.append({
+                                'is_pedestrian': is_ped,
+                                'is_car': is_car,
+                                'is_construction_signal': is_sig,
+                                'is_traffic_light': is_tl,
+                                'bbox_y_bottom': y_bot,
+                                'bbox_height': h_norm,
+                                'bbox_width': w_norm,
+                                'ego_speed': ego_vel[0],
+                                'z_gt': best_gt
+                            })
+        
+        # 7. シナリオ完了クリア判定
         if scenario_name == 'A':
             if len(gt_obstacles) > 0:
                 p_pos = gt_obstacles[0]['pos']
@@ -609,6 +752,10 @@ class CameraOnlyExperiment:
         elif scenario_name == 'D':
             if travel_dist >= 38.0:
                 self.clear_flag = True
+                
+        elif scenario_name == 'E':
+            if travel_dist >= 38.0:
+                self.clear_flag = True
 
         if not self.demo_mode:
             self.next_frame_id = self.world.tick()
@@ -618,6 +765,35 @@ class CameraOnlyExperiment:
             self._update_spectator()
 
         return log_entry
+        
+    def get_min_distance(self):
+        return self.scenario_min_distance
+        
+    def get_collision_count(self):
+        return self.scenario_collisions
+        
+    def get_worst_image(self):
+        return getattr(self, 'worst_case_image', None)
+        
+    def get_worst_step(self):
+        return getattr(self, 'worst_case_step', 0)
+        
+    def get_worst_case_parameters(self):
+        step = getattr(self, 'worst_case_step', 0)
+        for entry in self.log_data:
+            if entry['step'] == step:
+                return {
+                    'mu_perceived': entry.get('mu_perceived', 1.0),
+                    'mu_gt': entry.get('mu_gt', 1.0),
+                    'omega_perceived': entry.get('omega_perceived', 0.0),
+                    'omega_gt': entry.get('omega_gt', 0.0),
+                    'alpha_perceived': entry.get('alpha_perceived', 1.0),
+                    'alpha_gt': entry.get('alpha_gt', 1.0),
+                    'beta_perceived': entry.get('beta_perceived', 1.0),
+                    'beta_gt': entry.get('beta_gt', 1.0),
+                    'worst_obstacle': entry.get('worst_obstacle', 'unknown')
+                }
+        return {}
 
     def run_experiment(self, scenario_name, target_speed_kph=40.0, gap=12.0, deceleration=-6.0, max_ticks=200):
         """
@@ -765,6 +941,37 @@ class CameraOnlyExperiment:
                         self.scenario_start_x = ego_transform.location.x
                         
                 elif current_seq == 'C':
+                    print(f"--> Scenario C cleared! Spawning Scenario E (Red Light Intersection) 35m ahead.")
+                    current_seq = 'E'
+                    target_speed_kph = 40.0
+                    self.clear_flag = False
+                    self.scenario_start_x = ego_pos_x
+                    self.scenario_ticks = 0
+                    
+                    target_x = ego_pos_x + 35.0
+                    
+                    if self.demo_mode:
+                        self.mock_env.obstacles = [{
+                            'class': 'traffic_light',
+                            'pos': [target_x, 0.0, 0.0],
+                            'vel': [0.0, 0.0, 0.0],
+                            'color': 'red',
+                            'mu': 2.0
+                        }]
+                    else:
+                        if self.target_actor is not None:
+                            self.target_actor.destroy()
+                        barrier_bp = self.blueprint_library.find('static.prop.streetbarrier')
+                        ego_transform = self.ego_vehicle.get_transform()
+                        barrier_loc = ego_transform.location + ego_transform.get_forward_vector() * 35.0
+                        barrier_loc.z += 2.0
+                        barrier_transform = carla.Transform(barrier_loc, ego_transform.rotation)
+                        self.target_actor = self.world.spawn_actor(barrier_bp, barrier_transform)
+                        self.actors.append(self.target_actor)
+                        self.scenario_start_loc = ego_transform.location
+                        self.scenario_start_x = ego_transform.location.x
+                        
+                elif current_seq == 'E':
                     print(f"--> All Scenarios in sequence CLEARED!")
                     break
                     
@@ -850,10 +1057,19 @@ class CameraOnlyExperiment:
             self.world.apply_settings(self.original_settings)
             print("[INFO] CARLA synchronous mode disabled.")
 
+    def export_training_data(self, filepath="results/distance_training_data.csv"):
+        if not self.training_data:
+            print("[WARNING] No training data collected to export.")
+            return
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        df = pd.DataFrame(self.training_data)
+        df.to_csv(filepath, index=False)
+        print(f"[SUCCESS] Exported {len(df)} distance training samples to {filepath}")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Camera-Only ADAS Scenario Experiment Runner")
-    parser.add_argument('--scenario', type=str, default='A', choices=['A', 'B', 'C', 'D', 'sequence'],
-                        help="Scenario skeleton: A (CPNA), B (CCRb), C (CCFtap), D (AVOID), sequence (all dynamically)")
+    parser.add_argument('--scenario', choices=['A', 'B', 'C', 'D', 'E', 'sequence'], default='sequence',
+                        help="Scenario skeleton: A (CPNA), B (CCRb), C (CCFtap), D (AVOID), E (RLI), sequence (all dynamically)")
     parser.add_argument('--demo', action='store_true', help="Run offline in mock geometry/image mode")
     parser.add_argument('--ego-speed', type=float, default=40.0, help="Ego vehicle initial speed in km/h")
     parser.add_argument('--gap', type=float, default=12.0, help="Scenario B: Initial follow gap in meters")

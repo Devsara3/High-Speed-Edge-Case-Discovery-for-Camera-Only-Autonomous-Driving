@@ -1,6 +1,18 @@
 import cv2
 import numpy as np
+import os
 from ultralytics import YOLO
+
+# PyTorchおよびDistanceRegressorのインポート試行
+try:
+    import torch
+    import torch.nn as nn
+    import sys
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from train_distance_regressor import DistanceRegressor
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
 
 class YoloEvaluator:
     """
@@ -32,6 +44,20 @@ class YoloEvaluator:
         except Exception as e:
             self.depth_estimator = None
             print(f"[WARNING] Could not load MiDaS Depth Estimator. Falling back to Geometric Pinhole Model. Error: {e}")
+
+        # AI距離推定器 (DistanceRegressor) のロード試行
+        self.distance_regressor = None
+        if HAS_TORCH:
+            regressor_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'distance_regressor.pth')
+            if os.path.exists(regressor_path):
+                try:
+                    self.distance_regressor = DistanceRegressor()
+                    self.distance_regressor.load_state_dict(torch.load(regressor_path, map_location='cpu'))
+                    self.distance_regressor.eval()
+                    print("[INFO] AI Distance Regressor loaded successfully from distance_regressor.pth")
+                except Exception as ex:
+                    self.distance_regressor = None
+                    print(f"[WARNING] Could not load AI Distance Regressor model: {ex}")
 
     def detect_traffic_light_color(self, crop):
         """
@@ -86,7 +112,7 @@ class YoloEvaluator:
         
         return 'unknown'
 
-    def evaluate_multi(self, image, return_image=False):
+    def evaluate_multi(self, image, return_image=False, ego_speed=0.0):
         """
         画像を推論し、検出したすべてのオブジェクトの詳細リストを返します。
         """
@@ -128,72 +154,87 @@ class YoloEvaluator:
                         crop = processed_image[y1:y2, x1:x2]
                         tl_color = self.detect_traffic_light_color(crop)
                     
-                    # Z距離の推定 (MiDaS or Pinhole)
-                    if hasattr(self, 'depth_estimator') and self.depth_estimator is not None:
-                        rgb_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
-                        depth_map = self.depth_estimator.estimate(rgb_image)
-                        
-                        h, w = depth_map.shape
-                        bx1, by1 = max(0, x1), max(0, y1)
-                        bx2, by2 = min(w - 1, x2), min(h - 1, y2)
-                        
-                        if bx2 > bx1 and by2 > by1:
-                            box_depth = depth_map[by1:by2, bx1:bx2]
-                            median_disparity = np.median(box_depth)
-                            if median_disparity > 0:
-                                z_dist = 200.0 / median_disparity
+                    # 正規化BBox情報とクラスフラグの準備
+                    is_ped = 1.0 if class_name == 'pedestrian' else 0.0
+                    is_car = 1.0 if class_name == 'car' else 0.0
+                    is_signal = 1.0 if class_name == 'construction_signal' else 0.0
+                    is_tl = 1.0 if class_name == 'traffic_light' else 0.0
+                    
+                    y_bottom = float(y2) / img_height
+                    height_norm = float(y2 - y1) / img_height
+                    width_norm = float(x2 - x1) / img_width
+                    
+                    z_dist = float('inf')
+                    
+                    # 1. AI距離推定器 (DistanceRegressor) による予測試行
+                    if self.distance_regressor is not None and HAS_TORCH:
+                        try:
+                            input_tensor = torch.tensor([[is_ped, is_car, is_signal, is_tl, y_bottom, height_norm, width_norm, ego_speed]], dtype=torch.float32)
+                            with torch.no_grad():
+                                z_pred = self.distance_regressor(input_tensor).item()
+                            if 0.1 <= z_pred <= 150.0:
+                                z_dist = z_pred
+                        except Exception as ex:
+                            z_dist = float('inf')
+                            
+                    # 2. AIが使えない、または予測が異常値だった場合のフォールバック (従来のハイブリッド幾何モデル)
+                    if np.isinf(z_dist) or z_dist <= 0.0:
+                        if hasattr(self, 'depth_estimator') and self.depth_estimator is not None:
+                            rgb_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
+                            depth_map = self.depth_estimator.estimate(rgb_image)
+                            
+                            h, w = depth_map.shape
+                            bx1, by1 = max(0, x1), max(0, y1)
+                            bx2, by2 = min(w - 1, x2), min(h - 1, y2)
+                            
+                            if bx2 > bx1 and by2 > by1:
+                                box_depth = depth_map[by1:by2, bx1:bx2]
+                                median_disparity = np.median(box_depth)
+                                if median_disparity > 0:
+                                    z_dist = 200.0 / median_disparity
+                                else:
+                                    z_dist = float('inf')
                             else:
                                 z_dist = float('inf')
                         else:
-                            z_dist = float('inf')
-                    else:
-                        w_pixel = float(box.xywh[0][2])
-                        
-                        # 1. ピンホール幅モデルによる距離推定 (z_dist_width)
-                        real_width = 1.8
-                        if class_name == 'pedestrian':
-                            real_width = 0.5
-                        elif class_name == 'traffic_light':
-                            real_width = 0.3
-                        elif class_name == 'construction_signal':
-                            real_width = 0.8
+                            w_pixel = float(box.xywh[0][2])
                             
-                        if w_pixel > 1.0:
-                            z_dist_width = (focal_length * real_width) / w_pixel
-                        else:
-                            z_dist_width = float('inf')
+                            # A. ピンホール幅モデル
+                            real_width = 1.8
+                            if class_name == 'pedestrian':
+                                real_width = 0.5
+                            elif class_name == 'traffic_light':
+                                real_width = 0.3
+                            elif class_name == 'construction_signal':
+                                real_width = 0.8
+                                
+                            if w_pixel > 1.0:
+                                z_dist_width = (focal_length * real_width) / w_pixel
+                            else:
+                                z_dist_width = float('inf')
 
-                        # 2. 接地面制約モデル (Ground Plane Constraint) による距離推定 (z_dist_ground)
-                        # カメラの高さ H = 1.4m、ピッチ角 pitch = -5.0度 (下向き) を想定
-                        H_cam = 1.4
-                        pitch_rad = np.radians(-5.0)
-                        
-                        y2_val = float(y2)
-                        
-                        # 俯角 phi の計算 (画像中心からの偏角 + カメラピッチ角)
-                        angle_from_center = np.arctan((y2_val - c_y) / focal_length)
-                        phi = pitch_rad + angle_from_center
-                        
-                        # 自車からの水平距離の算出
-                        # カメラが下を向いているため、phi < 0 のときに路面と交差する
-                        if phi < -1e-3:
-                            z_dist_ground = H_cam / np.tan(-phi)
-                        else:
-                            z_dist_ground = float('inf')
+                            # B. 接地面制約モデル
+                            H_cam = 1.4
+                            pitch_rad = np.radians(-5.0)
+                            y2_val = float(y2)
+                            angle_from_center = np.arctan((y2_val - c_y) / focal_length)
+                            phi = pitch_rad + angle_from_center
+                            
+                            if phi < -1e-3:
+                                z_dist_ground = H_cam / np.tan(-phi)
+                            else:
+                                z_dist_ground = float('inf')
 
-                        # 3. ハイブリッド距離の決定
-                        if class_name == 'traffic_light':
-                            # 信号機は空中に浮いているため、接地面モデルは適用せず幅モデルを100%採用
-                            z_dist = z_dist_width
-                        else:
-                            # どちらかが異常値の場合は他方を採用
-                            if np.isinf(z_dist_width) or z_dist_width > 150.0:
-                                z_dist = z_dist_ground
-                            elif np.isinf(z_dist_ground) or z_dist_ground > 150.0 or z_dist_ground < 1.0:
+                            # C. ブレンド
+                            if class_name == 'traffic_light':
                                 z_dist = z_dist_width
                             else:
-                                # 両方とも妥当な値の場合は、重み付け平均
-                                z_dist = 0.4 * z_dist_width + 0.6 * z_dist_ground
+                                if np.isinf(z_dist_width) or z_dist_width > 150.0:
+                                    z_dist = z_dist_ground
+                                elif np.isinf(z_dist_ground) or z_dist_ground > 150.0 or z_dist_ground < 1.0:
+                                    z_dist = z_dist_width
+                                else:
+                                    z_dist = 0.4 * z_dist_width + 0.6 * z_dist_ground
                             
                     # 逆投影によるカメラ座標基準の相対3D座標 [X, Y, Z] の算出
                     if not np.isinf(z_dist):
@@ -211,7 +252,10 @@ class YoloEvaluator:
                         'z_distance': z_dist,
                         'yolo3d_rel_pos': yolo3d_rel_pos,
                         'traffic_light_color': tl_color,
-                        'bbox': (x1, y1, x2, y2)
+                        'bbox': (x1, y1, x2, y2),
+                        'bbox_y_bottom': y_bottom,
+                        'bbox_height': height_norm,
+                        'bbox_width': width_norm
                     })
                     
                     if return_image:
