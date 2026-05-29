@@ -545,23 +545,15 @@ class CameraOnlyExperiment:
                     target_tf = self.target_actor.get_transform()
                     dist_to_target = ego_tf.location.distance(target_tf.location)
                     
-                    speed = 11.11 
-                    fwd_vec = target_tf.get_forward_vector()
-                    
-                    # 距離が15m以下になったら、進行方向ベクトルに右方向ベクトルを足して強引に右折させる
-                    if dist_to_target < 15.0:
-                        right_vec = target_tf.get_right_vector()
-                        # 前方と右方をブレンドして斜めの速度ベクトルにする
-                        new_dir = carla.Vector3D(fwd_vec.x + right_vec.x * 0.7, 
-                                                 fwd_vec.y + right_vec.y * 0.7, 
-                                                 fwd_vec.z + right_vec.z * 0.7)
-                        norm = (new_dir.x**2 + new_dir.y**2 + new_dir.z**2)**0.5
-                        vel = carla.Vector3D(new_dir.x/norm * speed, new_dir.y/norm * speed, new_dir.z/norm * speed)
-                        self.target_actor.set_target_velocity(vel)
-                        # 見た目の回転も加える
-                        self.target_actor.set_target_angular_velocity(carla.Vector3D(0, 0, 30.0))
+                    # 距離が近づいたら、自然な物理挙動(VehicleControl)で強引にハンドルを切る
+                    if dist_to_target < 20.0:
+                        # steer値を適用して自車線側(対向車から見て左方向)に割り込む
+                        control = carla.VehicleControl(throttle=0.8, steer=-0.6)
+                        self.target_actor.apply_control(control)
                     else:
-                        self.target_actor.set_target_velocity(carla.Vector3D(fwd_vec.x * speed, fwd_vec.y * speed, fwd_vec.z * speed))
+                        # 遠い場合は直進
+                        control = carla.VehicleControl(throttle=0.8, steer=0.0)
+                        self.target_actor.apply_control(control)
             
             yolo_detections = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
             
@@ -993,14 +985,38 @@ class CameraOnlyExperiment:
                             self.target_actor.destroy()
                         lead_bp = self.blueprint_library.filter('model3')[0]
                         ego_transform = self.ego_vehicle.get_transform()
-                        target_loc = ego_transform.location + ego_transform.get_forward_vector() * 15.0 + ego_transform.get_right_vector() * 3.5
-                        target_loc.z += 0.5
-                        target_rot = carla.Rotation(pitch=ego_transform.rotation.pitch,
-                                                    yaw=ego_transform.rotation.yaw + 180.0,
-                                                    roll=ego_transform.rotation.roll)
+                        
+                        # 自車の20m先のウェイポイントから対向車線を探索
+                        wp = self.world.get_map().get_waypoint(ego_transform.location)
+                        next_wps = wp.next(20.0)
+                        if next_wps:
+                            target_wp = next_wps[0]
+                            # 左車線（対向車線）へのオフセット配置
+                            target_loc = target_wp.transform.location + target_wp.transform.get_right_vector() * -3.5
+                            target_loc.z += 0.5
+                            target_rot = carla.Rotation(pitch=target_wp.transform.rotation.pitch,
+                                                        yaw=target_wp.transform.rotation.yaw + 180.0,
+                                                        roll=target_wp.transform.rotation.roll)
+                        else:
+                            target_loc = ego_transform.location + ego_transform.get_forward_vector() * 20.0 + ego_transform.get_right_vector() * -3.5
+                            target_loc.z += 0.5
+                            target_rot = carla.Rotation(pitch=ego_transform.rotation.pitch,
+                                                        yaw=ego_transform.rotation.yaw + 180.0,
+                                                        roll=ego_transform.rotation.roll)
+                                                        
                         target_transform = carla.Transform(target_loc, target_rot)
-                        self.target_actor = self.world.spawn_actor(lead_bp, target_transform)
-                        self.actors.append(self.target_actor)
+                        
+                        # 衝突によるスポーン失敗を防ぐため try_spawn_actor を使用
+                        self.target_actor = self.world.try_spawn_actor(lead_bp, target_transform)
+                        if self.target_actor is None:
+                            target_transform.location.z += 1.0  # 少し上にずらしてリトライ
+                            self.target_actor = self.world.try_spawn_actor(lead_bp, target_transform)
+                            
+                        if self.target_actor is not None:
+                            self.actors.append(self.target_actor)
+                        else:
+                            print("[WARNING] Failed to spawn oncoming vehicle for Scenario C!")
+                            
                         self.scenario_start_loc = ego_transform.location
                         self.scenario_start_x = ego_transform.location.x
                         
