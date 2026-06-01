@@ -33,9 +33,14 @@ class CameraOnlyExperiment:
         self.risk_calculator = RiskCalculator()
         self.hsc_emulator = HSCEmulator()
         self.camera_type = 'RGB' # デフォルトはRGB
-        self.log_data = []
+        self.actors = []
         self.training_data = []
-        self.time_step = 0
+        self.log_data = []
+        
+        # HUD動画保存用
+        os.makedirs('results', exist_ok=True)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.video_writer = cv2.VideoWriter('results/sensor_record.mp4', fourcc, 20.0, (1280, 720))
         self.current_scenario = None
         self.clear_flag = False
         
@@ -682,29 +687,31 @@ class CameraOnlyExperiment:
                         self.target_actor.apply_control(control)
             
             yolo_detections = self.evaluator.evaluate_multi(image_left, image_right=image_right, ego_speed=ego_vel[0])
-            image = image_left # 下流の可視化コード等で参照されるため互換性維持
+            image = image_left.copy() if image_left is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
             
             gt_obstacles = []
             
-            # --- LiDAR/Radar 距離・速度の実測 ---
-            if lidar_data is not None:
-                lidar_points = np.frombuffer(lidar_data.raw_data, dtype=np.float32)
-                lidar_points = np.reshape(lidar_points, (-1, 4))
-                # X > 0 (前方), |Y| < 2.0 (車線幅内)
-                front_points = lidar_points[(lidar_points[:, 0] > 0) & (np.abs(lidar_points[:, 1]) < 2.0)]
-                if len(front_points) > 0:
-                    closest_idx = np.argmin(front_points[:, 0])
-                    measured_distance = front_points[closest_idx, 0]
-                    measured_lateral = front_points[closest_idx, 1]
+            # --- LiDAR Projection & Radar Extraction ---
+            projected_lidar = []
+            if not self.demo_mode and lidar_data is not None:
+                lidar_points = np.frombuffer(lidar_data.raw_data, dtype=np.float32).reshape((-1, 4))
+                # 3D空間のLiDAR点群をカメラの2D画像平面に投影 (f=448.1, cx=640, cy=360)
+                for pt in lidar_points:
+                    x, y, z, _ = pt
+                    if x > 0.5: # 前方のみ
+                        u = int((y * 448.1) / x + 640)
+                        v = int((-z * 448.1) / x + 360)
+                        if 0 <= u < 1280 and 0 <= v < 720:
+                            projected_lidar.append((u, v, x))
+                            # 描画用 (小さく緑で打つ)
+                            cv2.circle(image, (u, v), 1, (0, 255, 0), -1)
 
             if radar_data is not None:
-                radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32)
-                radar_points = np.reshape(radar_points, (-1, 4))
-                # |azimuth| < 0.1 rad (真正面付近)
+                radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32).reshape((-1, 4))
                 front_radar = radar_points[np.abs(radar_points[:, 1]) < 0.1]
                 if len(front_radar) > 0:
-                    closest_idx = np.argmin(front_radar[:, 3]) # depth最小
-                    measured_rel_vel = front_radar[closest_idx, 0] # CARLA radar: positive is approaching
+                    closest_idx = np.argmin(front_radar[:, 3])
+                    measured_rel_vel = front_radar[closest_idx, 0]
                     measured_radar_dist = front_radar[closest_idx, 3]
                     
             v_ego_norm = np.linalg.norm(ego_vel)
@@ -834,27 +841,50 @@ class CameraOnlyExperiment:
             control.steer = float(steer_cmd)
             self.ego_vehicle.apply_control(control)
 
-        # 4. フュージョンリスクと過去の比較用リスクの計算
+        # 4. 空間センサーフュージョンとリスクの計算
         measured_class = 'unknown'
-        min_yolo_d = float('inf')
+        fused_dist = float('inf')
+        global_dist_lidar = float('inf')
+        global_dist_camera = float('inf')
+        
+        # YOLOの各バウンディングボックス内で、LiDARとStereoの空間フュージョンを実行
         for det in yolo_detections:
-            if det.get('z_distance') is not None and det['z_distance'] < min_yolo_d:
-                min_yolo_d = det['z_distance']
-                measured_class = det['class']
-                
-        # 距離フュージョン戦略 (Phantom Braking 回避)
-        dist_lidar = measured_distance if measured_distance is not None else float('inf')
-        dist_camera = min_yolo_d
-        dist_radar = measured_radar_dist if measured_radar_dist is not None else float('inf')
-        
-        # 基本ルール: 安全側（近い方）を採用
-        fused_dist = min(dist_lidar, dist_camera)
-        
-        # ノイズ棄却ルール: LiDARが3m以内に物体を検出しているが、カメラもレーダーも遠方しか見ていない場合、
-        # LiDARの悪天候バックスキャッターノイズ（雨粒ゴースト）とみなして棄却。
-        if dist_lidar < 3.0 and dist_camera > 10.0 and dist_radar > 10.0:
-            fused_dist = dist_camera
+            stereo_d = det.get('z_distance', float('inf'))
+            lidar_d = float('inf')
             
+            if 'bbox' in det:
+                x1, y1, x2, y2 = det['bbox']
+                # 枠内のLiDAR点を抽出
+                lidar_in_box = [pt[2] for pt in projected_lidar if x1 <= pt[0] <= x2 and y1 <= pt[1] <= y2]
+                if len(lidar_in_box) > 0:
+                    lidar_d = np.median(lidar_in_box)
+                
+                # スマート・フュージョン
+                if not np.isinf(lidar_d) and not np.isinf(stereo_d):
+                    # LiDARとStereoの差が小さければ（またはカメラが遠すぎてLiDARが近い場合は雨粒の可能性あり）
+                    if abs(lidar_d - stereo_d) < 5.0 or (lidar_d > 3.0):
+                        final_d = lidar_d # 高精度なLiDARを信用
+                    else:
+                        final_d = stereo_d # LiDARの近接ノイズ(ゴースト)として棄却し、Stereoを信用
+                elif not np.isinf(lidar_d):
+                    final_d = lidar_d
+                else:
+                    final_d = stereo_d
+                
+                det['fused_distance'] = final_d
+                det['lidar_distance'] = lidar_d
+                
+                # 描画 (HUD)
+                cv2.rectangle(image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                text = f"{det['class']} Fused:{final_d:.1f}m (L:{lidar_d:.1f}/C:{stereo_d:.1f})"
+                cv2.putText(image, text, (x1, max(y1 - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                
+                if final_d < fused_dist:
+                    fused_dist = final_d
+                    measured_class = det['class']
+                    global_dist_lidar = lidar_d
+                    global_dist_camera = stereo_d
+                    
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
         r_fusion, info = self.risk_calculator.calculate_fusion_risk(
@@ -899,8 +929,8 @@ class CameraOnlyExperiment:
             'ego_vx': ego_vel[0],
             'worst_obstacle': measured_class,
             'fusion_distance': dist_for_risk,
-            'dist_lidar': dist_lidar,
-            'dist_camera': dist_camera,
+            'dist_lidar': global_dist_lidar,
+            'dist_camera': global_dist_camera,
             'dist_gt': dist_gt,
             'r_fusion': r_fusion,
             'r_perceived': r_perceived,
@@ -940,6 +970,14 @@ class CameraOnlyExperiment:
                     print(f"[CRASH] Collision detected! Min Distance: {current_min_dist:.2f}m")
                     
         log_entry['min_gt_distance'] = self.scenario_min_distance
+        # HUDのテキスト描画と動画保存
+        cv2.putText(image, f"Risk: {r_fusion:.2f} | Gap: {gap:.2f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255) if r_fusion > 1.0 else (0, 255, 0), 2)
+        cv2.putText(image, f"Action: {'Brake' if accel_cmd < 0 else 'Cruise'} | Steer: {steer_cmd:.2f}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
+        cv2.putText(image, f"Dist (L/C/F): {global_dist_lidar:.1f} / {global_dist_camera:.1f} / {fused_dist:.1f}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        
+        if hasattr(self, 'video_writer'):
+            self.video_writer.write(image)
+        
         self.log_data.append(log_entry)
         
         # 6. 学習データの自動収集
@@ -1364,6 +1402,10 @@ class CameraOnlyExperiment:
         return float(df['perception_gap'].max())
 
     def shutdown(self):
+        if hasattr(self, 'video_writer'):
+            self.video_writer.release()
+            print("[INFO] Video saved to results/sensor_record.mp4")
+            
         if not self.demo_mode:
             self._destroy_actors()
             self.world.apply_settings(self.original_settings)
