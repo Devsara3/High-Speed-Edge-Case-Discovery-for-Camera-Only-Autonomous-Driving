@@ -11,7 +11,7 @@ import pandas as pd
 import optuna
 from run_camera_only_experiment import CameraOnlyExperiment
 
-def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', demo_mode=True):
+def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', demo_mode=True, mode='exploit'):
     """
     Optunaによる天候パラメータ探索を実行。
     """
@@ -23,9 +23,11 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     
     os.makedirs("results", exist_ok=True)
     
-    if sampler_name == 'Random':
-        sampler = optuna.samplers.RandomSampler(seed=42)
+    if mode == 'explore' or sampler_name == 'Random':
+        print("  => EXPLORE MODE ACTIVE: Using Random Sampler for unbiased diverse data collection.")
+        sampler = optuna.samplers.RandomSampler(seed=None)
     else:
+        print("  => EXPLOIT MODE ACTIVE: Using TPE Sampler to find worst-case edge cases.")
         sampler = optuna.samplers.TPESampler(seed=42)
         
     study = optuna.create_study(direction="maximize", sampler=sampler)
@@ -140,7 +142,8 @@ if __name__ == "__main__":
     parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random"], help="Sampler (default: TPE)")
     parser.add_argument("--scenario", type=str, default="sequence", choices=["A", "B", "C", "D", "E", "sequence"], 
                         help="Scenario skeleton: A (CPNA), B (CCRb), C (CCFtap), D (AVOID), E (RLI), sequence (all dynamically)")
+    parser.add_argument("--mode", type=str, default="exploit", choices=["exploit", "explore"], help="Mode: exploit (find worst edge cases) or explore (collect random diverse data)")
     parser.add_argument("--demo", action="store_true", help="Run in mock/demo mode without CARLA server")
     args = parser.parse_args()
     
-    run_optuna_search(n_trials=args.trials, sampler_name=args.sampler, scenario_name=args.scenario, demo_mode=args.demo)
+    run_optuna_search(n_trials=args.trials, sampler_name=args.sampler, scenario_name=args.scenario, demo_mode=args.demo, mode=args.mode)

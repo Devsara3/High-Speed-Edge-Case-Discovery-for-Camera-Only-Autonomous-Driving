@@ -185,6 +185,10 @@ class YoloEvaluator:
                     height_norm = float(y2 - y1) / img_height
                     width_norm = float(x2 - x1) / img_width
                     
+                    dist_stereo = float('inf')
+                    dist_ai = float('inf')
+                    dist_pinhole = float('inf')
+                    
                     z_dist = float('inf')
                     
                     # 0. ステレオカメラ (SGBM) による視差ベースの距離推定
@@ -196,82 +200,39 @@ class YoloEvaluator:
                             valid_disp = box_disp[box_disp > 0]
                             if len(valid_disp) > 0:
                                 median_disp = np.median(valid_disp)
-                                # Z = (focal_length * baseline) / disparity
-                                # ベースラインは 0.54m に設定
                                 if median_disp > 0:
-                                    z_stereo = (focal_length * 0.54) / median_disp
-                                    if 0.1 <= z_stereo <= 150.0:
-                                        z_dist = z_stereo
+                                    dist_stereo = (focal_length * 0.54) / median_disp
+                                    if 0.1 <= dist_stereo <= 150.0:
+                                        z_dist = dist_stereo
                     
                     # 1. AI距離推定器 (DistanceRegressor) による予測試行
-                    if np.isinf(z_dist) and self.distance_regressor is not None and HAS_TORCH:
+                    if self.distance_regressor is not None and HAS_TORCH:
                         try:
                             input_tensor = torch.tensor([[is_ped, is_car, is_signal, is_tl, y_bottom, height_norm, width_norm, ego_speed]], dtype=torch.float32)
                             with torch.no_grad():
                                 z_pred = self.distance_regressor(input_tensor).item()
                             if 0.1 <= z_pred <= 150.0:
-                                z_dist = z_pred
+                                dist_ai = z_pred
+                                if np.isinf(z_dist):
+                                    z_dist = z_pred
                         except Exception as ex:
-                            z_dist = float('inf')
+                            pass
                             
-                    # 2. AIが使えない、または予測が異常値だった場合のフォールバック (従来のハイブリッド幾何モデル)
-                    if np.isinf(z_dist) or z_dist <= 0.0:
-                        if hasattr(self, 'depth_estimator') and self.depth_estimator is not None:
-                            rgb_image = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
-                            depth_map = self.depth_estimator.estimate(rgb_image)
-                            
-                            h, w = depth_map.shape
-                            bx1, by1 = max(0, x1), max(0, y1)
-                            bx2, by2 = min(w - 1, x2), min(h - 1, y2)
-                            
-                            if bx2 > bx1 and by2 > by1:
-                                box_depth = depth_map[by1:by2, bx1:bx2]
-                                median_disparity = np.median(box_depth)
-                                if median_disparity > 0:
-                                    z_dist = 200.0 / median_disparity
-                                else:
-                                    z_dist = float('inf')
-                            else:
-                                z_dist = float('inf')
-                        else:
-                            w_pixel = float(box.xywh[0][2])
-                            
-                            # A. ピンホール幅モデル
-                            real_width = 1.8
-                            if class_name == 'pedestrian':
-                                real_width = 0.5
-                            elif class_name == 'traffic_light':
-                                real_width = 0.3
-                            elif class_name == 'construction_signal':
-                                real_width = 0.8
-                                
-                            if w_pixel > 1.0:
-                                z_dist_width = (focal_length * real_width) / w_pixel
-                            else:
-                                z_dist_width = float('inf')
-
-                            # B. 接地面制約モデル
-                            H_cam = 1.4
-                            pitch_rad = np.radians(-5.0)
-                            y2_val = float(y2)
-                            angle_from_center = np.arctan((y2_val - c_y) / focal_length)
-                            phi = pitch_rad + angle_from_center
-                            
-                            if phi < -1e-3:
-                                z_dist_ground = H_cam / np.tan(-phi)
-                            else:
-                                z_dist_ground = float('inf')
-
-                            # C. ブレンド
-                            if class_name == 'traffic_light':
-                                z_dist = z_dist_width
-                            else:
-                                if np.isinf(z_dist_width) or z_dist_width > 150.0:
-                                    z_dist = z_dist_ground
-                                elif np.isinf(z_dist_ground) or z_dist_ground > 150.0 or z_dist_ground < 1.0:
-                                    z_dist = z_dist_width
-                                else:
-                                    z_dist = 0.4 * z_dist_width + 0.6 * z_dist_ground
+                    # 2. ピンホールカメラ幾何学による推定
+                    w_pixel = float(box.xywh[0][2])
+                    real_width = 1.8
+                    if class_name == 'pedestrian':
+                        real_width = 0.5
+                    elif class_name == 'traffic_light':
+                        real_width = 0.3
+                    elif class_name == 'construction_signal':
+                        real_width = 0.8
+                        
+                    if w_pixel > 1.0:
+                        dist_pinhole = (focal_length * real_width) / w_pixel
+                    
+                    if np.isinf(z_dist):
+                        z_dist = dist_pinhole
                             
                     # 逆投影によるカメラ座標基準の相対3D座標 [X, Y, Z] の算出
                     if not np.isinf(z_dist):
@@ -286,7 +247,10 @@ class YoloEvaluator:
                     detections.append({
                         'class': class_name,
                         'confidence': conf,
-                        'z_distance': z_dist,
+                        'z_distance': z_dist, # 代表距離 (フュージョン前)
+                        'dist_stereo': dist_stereo,
+                        'dist_ai': dist_ai,
+                        'dist_pinhole': dist_pinhole,
                         'yolo3d_rel_pos': yolo3d_rel_pos,
                         'traffic_light_color': tl_color,
                         'bbox': (x1, y1, x2, y2),
