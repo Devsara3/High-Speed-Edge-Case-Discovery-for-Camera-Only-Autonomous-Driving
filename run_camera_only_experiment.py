@@ -870,7 +870,9 @@ class CameraOnlyExperiment:
             if self.clear_flag:
                 print(f"--> Scenario {scenario_name} CLEARED at Step {tick}!")
                 break
-                
+
+        self._save_worst_image(scenario_name)
+
         if not self.demo_mode:
             self._destroy_actors()
 
@@ -900,6 +902,7 @@ class CameraOnlyExperiment:
                 
                 if current_seq == 'A':
                     print(f"--> Scenario A cleared! Spawning Scenario D (Barrier Avoidance) 25m ahead.")
+                    self._save_worst_image('A')
                     current_seq = 'D'
                     target_speed_kph = 40.0
                     self.clear_flag = False
@@ -929,6 +932,7 @@ class CameraOnlyExperiment:
                         
                 elif current_seq == 'D':
                     print(f"--> Scenario D cleared! Spawning Scenario B (Lead Vehicle Sudden Brake) 20m ahead.")
+                    self._save_worst_image('D')
                     current_seq = 'B'
                     target_speed_kph = 50.0
                     self.clear_flag = False
@@ -972,6 +976,7 @@ class CameraOnlyExperiment:
                         
                 elif current_seq == 'B':
                     print(f"--> Scenario B cleared! Spawning Scenario C (Crossing Vehicle) at oncoming path.")
+                    self._save_worst_image('B')
                     current_seq = 'C'
                     target_speed_kph = 15.0
                     self.clear_flag = False
@@ -1031,6 +1036,7 @@ class CameraOnlyExperiment:
                         
                 elif current_seq == 'C':
                     print(f"--> Scenario C cleared! Spawning Scenario E (Red Light Intersection) 35m ahead.")
+                    self._save_worst_image('C')
                     current_seq = 'E'
                     target_speed_kph = 40.0
                     self.clear_flag = False
@@ -1062,6 +1068,7 @@ class CameraOnlyExperiment:
                         
                 elif current_seq == 'E':
                     print(f"--> All Scenarios in sequence CLEARED!")
+                    self._save_worst_image('E')
                     break
                     
         if not self.demo_mode:
@@ -1084,14 +1091,24 @@ class CameraOnlyExperiment:
             if hasattr(self, 'next_frame_id'):
                 self.next_frame_id = frame_id
 
-    def visualize_and_save(self, save_path="results/risk_params_timeseries.png"):
+    def visualize_and_save(self, save_path="results/risk_params_timeseries.png", scenario_name=None):
         """
         時系列プロットを作成して保存。
+        シナリオ名が指定された場合、ファイル名に自動的にシナリオ名を含めて上書きを防止します。
         """
         if not self.log_data:
             print("[WARNING] No log data to plot.")
             return
-            
+
+        # シナリオ名をファイル名に注入（未指定時は current_scenario から取得を試みる）
+        scenario = scenario_name or getattr(self, 'current_scenario', None)
+        if scenario:
+            dir_name = os.path.dirname(save_path)
+            base_name = os.path.basename(save_path)
+            name_stem, ext = os.path.splitext(base_name)
+            if f"_{scenario}" not in name_stem:
+                save_path = os.path.join(dir_name, f"{name_stem}_{scenario}{ext}")
+
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         df = pd.DataFrame(self.log_data)
         
@@ -1133,6 +1150,17 @@ class CameraOnlyExperiment:
         plt.savefig(save_path, dpi=150)
         plt.close()
         print(f"[SUCCESS] Timeseries validation plot saved at {save_path}")
+
+    def _save_worst_image(self, scenario_name):
+        """シナリオ完了時、知覚ギャップが最大だった瞬間のカメラ画像を保存。"""
+        img = self.get_worst_image()
+        if img is None:
+            return
+        os.makedirs("results", exist_ok=True)
+        timestamp = getattr(self, 'time_step', 0)
+        path = f"results/worst_case_{scenario_name}_step{timestamp}.jpg"
+        cv2.imwrite(path, img)
+        print(f"[SAVE] Worst-case edge-case image saved: {path}")
 
     def get_max_gap(self):
         if not self.log_data:
@@ -1178,7 +1206,7 @@ if __name__ == "__main__":
         else:
             experiment.run_experiment(args.scenario, target_speed_kph=args.ego_speed, gap=args.gap, deceleration=args.decel)
             
-        experiment.visualize_and_save(args.save_path)
+        experiment.visualize_and_save(args.save_path, scenario_name=args.scenario)
         
     finally:
         experiment.shutdown()
