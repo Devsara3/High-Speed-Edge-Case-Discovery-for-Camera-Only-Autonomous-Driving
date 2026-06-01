@@ -12,6 +12,8 @@ from risk_calculator import RiskCalculator
 from evaluator import YoloEvaluator
 from carla_mock import MockCarlaEnv
 
+from hsc_emulator import HSCEmulator
+
 # CARLAのインポート試行
 try:
     import carla
@@ -29,6 +31,8 @@ class CameraOnlyExperiment:
         self.demo_mode = demo_mode or not CARLA_AVAILABLE
         self.evaluator = YoloEvaluator()
         self.risk_calculator = RiskCalculator()
+        self.hsc_emulator = HSCEmulator()
+        self.camera_type = 'RGB' # デフォルトはRGB
         self.log_data = []
         self.training_data = []
         self.time_step = 0
@@ -226,30 +230,112 @@ class CameraOnlyExperiment:
         self.scenario_start_loc = ego_transform.location
         self.scenario_start_x = ego_transform.location.x
         
-        # 2. カメラの取り付け
+        # 2. ステレオカメラの取り付け (Left & Right)
         camera_bp = self.blueprint_library.find('sensor.camera.rgb')
         camera_bp.set_attribute('image_size_x', '1280')
         camera_bp.set_attribute('image_size_y', '720')
         camera_bp.set_attribute('fov', '110')
-        camera_transform = carla.Transform(
-            carla.Location(x=2.0, y=0.0, z=1.4),
+        
+        camera_transform_left = carla.Transform(
+            carla.Location(x=2.0, y=-0.27, z=1.4),
             carla.Rotation(pitch=-5.0, yaw=0.0, roll=0.0)
         )
-        self.camera = self.world.spawn_actor(camera_bp, camera_transform, attach_to=self.ego_vehicle)
-        self.actors.append(self.camera)
+        self.camera_left = self.world.spawn_actor(camera_bp, camera_transform_left, attach_to=self.ego_vehicle)
+        self.actors.append(self.camera_left)
         
-        # キューのクリア
-        while not self.image_queue.empty():
-            self.image_queue.get()
+        camera_transform_right = carla.Transform(
+            carla.Location(x=2.0, y=0.27, z=1.4),
+            carla.Rotation(pitch=-5.0, yaw=0.0, roll=0.0)
+        )
+        self.camera_right = self.world.spawn_actor(camera_bp, camera_transform_right, attach_to=self.ego_vehicle)
+        self.actors.append(self.camera_right)
+        
+        # キューの作成とクリア
+        import queue
+        if not hasattr(self, 'image_queue_left'):
+            self.image_queue_left = queue.Queue()
+            self.image_queue_right = queue.Queue()
+            
+        while not self.image_queue_left.empty():
+            self.image_queue_left.get()
+        while not self.image_queue_right.empty():
+            self.image_queue_right.get()
             
         # コールバックで(フレームID, 画像)を格納
-        def _on_camera_capture(image):
+        def _on_camera_capture_left(image):
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
             bgr_image = array[:, :, :3]
-            self.image_queue.put((image.frame, bgr_image))
+            self.image_queue_left.put((image.frame, bgr_image))
             
-        self.camera.listen(_on_camera_capture)
+        def _on_camera_capture_right(image):
+            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+            array = np.reshape(array, (image.height, image.width, 4))
+            bgr_image = array[:, :, :3]
+            self.image_queue_right.put((image.frame, bgr_image))
+            
+        self.camera_left.listen(_on_camera_capture_left)
+        self.camera_right.listen(_on_camera_capture_right)
+        
+        # --- 3. フルセンサー＆HSC用の追加センサー ---
+        lidar_bp = self.blueprint_library.find('sensor.lidar.ray_cast')
+        lidar_bp.set_attribute('range', '50.0')
+        lidar_bp.set_attribute('channels', '32')
+        lidar_bp.set_attribute('points_per_second', '56000')
+        lidar_bp.set_attribute('rotation_frequency', '10')
+        lidar_bp.set_attribute('sensor_tick', '0.0')
+        self.lidar = self.world.spawn_actor(lidar_bp, camera_transform_left, attach_to=self.ego_vehicle)
+        self.actors.append(self.lidar)
+        
+        radar_bp = self.blueprint_library.find('sensor.other.radar')
+        radar_bp.set_attribute('horizontal_fov', '30')
+        radar_bp.set_attribute('vertical_fov', '30')
+        radar_bp.set_attribute('range', '100')
+        radar_bp.set_attribute('sensor_tick', '0.0')
+        self.radar = self.world.spawn_actor(radar_bp, camera_transform_left, attach_to=self.ego_vehicle)
+        self.actors.append(self.radar)
+        
+        depth_bp = self.blueprint_library.find('sensor.camera.depth')
+        depth_bp.set_attribute('image_size_x', '1280')
+        depth_bp.set_attribute('image_size_y', '720')
+        depth_bp.set_attribute('fov', '110')
+        self.depth_cam = self.world.spawn_actor(depth_bp, camera_transform_left, attach_to=self.ego_vehicle)
+        self.actors.append(self.depth_cam)
+        
+        seg_bp = self.blueprint_library.find('sensor.camera.semantic_segmentation')
+        seg_bp.set_attribute('image_size_x', '1280')
+        seg_bp.set_attribute('image_size_y', '720')
+        seg_bp.set_attribute('fov', '110')
+        self.seg_cam = self.world.spawn_actor(seg_bp, camera_transform_left, attach_to=self.ego_vehicle)
+        self.actors.append(self.seg_cam)
+        
+        if not hasattr(self, 'lidar_queue'):
+            self.lidar_queue = queue.Queue()
+            self.radar_queue = queue.Queue()
+            self.depth_queue = queue.Queue()
+            self.seg_queue = queue.Queue()
+            
+        while not self.lidar_queue.empty(): self.lidar_queue.get()
+        while not self.radar_queue.empty(): self.radar_queue.get()
+        while not self.depth_queue.empty(): self.depth_queue.get()
+        while not self.seg_queue.empty(): self.seg_queue.get()
+        
+        def _on_lidar(data): self.lidar_queue.put((data.frame, data))
+        def _on_radar(data): self.radar_queue.put((data.frame, data))
+        def _on_depth(image):
+            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+            array = np.reshape(array, (image.height, image.width, 4))
+            self.depth_queue.put((image.frame, array))
+        def _on_seg(image):
+            image.convert(carla.ColorConverter.Raw) # Raw IDを取得
+            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+            array = np.reshape(array, (image.height, image.width, 4))
+            self.seg_queue.put((image.frame, array))
+            
+        self.lidar.listen(_on_lidar)
+        self.radar.listen(_on_radar)
+        self.depth_cam.listen(_on_depth)
+        self.seg_cam.listen(_on_seg)
         
         v_ego = ego_speed_kph / 3.6
         fwd = ego_transform.get_forward_vector()
@@ -366,6 +452,14 @@ class CameraOnlyExperiment:
         dt = 0.05
         self.time_step += 1
         self.scenario_ticks += 1
+        
+        lidar_data = None
+        radar_data = None
+        measured_distance = None
+        measured_radar_dist = None
+        measured_lateral = 0.0
+        measured_rel_vel = 0.0
+        final_dist = None
         
         # 1. 物理状態およびカメラ画像（YOLO3D）の取得
         if self.demo_mode:
@@ -490,31 +584,63 @@ class CameraOnlyExperiment:
                     })
         else:
             # 1. 期待するフレームID (self.next_frame_id) の画像をキューから取得する（同期）
-            image = None
+            image_left = None
+            image_right = None
+            lidar_data = None
+            radar_data = None
+            depth_img = None
+            seg_img = None
+            
             start_wait = time.time()
             while time.time() - start_wait < 2.0:
                 try:
-                    sensor_frame, bgr_img = self.image_queue.get(timeout=0.1)
-                    if sensor_frame == self.next_frame_id:
-                        image = bgr_img
+                    sensor_frame_l, bgr_img_l = self.image_queue_left.get(timeout=0.1)
+                    sensor_frame_r, bgr_img_r = self.image_queue_right.get(timeout=0.1)
+                    sensor_frame_lidar, l_data = self.lidar_queue.get(timeout=0.1)
+                    sensor_frame_radar, r_data = self.radar_queue.get(timeout=0.1)
+                    sensor_frame_depth, d_img = self.depth_queue.get(timeout=0.1)
+                    sensor_frame_seg, s_img = self.seg_queue.get(timeout=0.1)
+                    
+                    frames = [sensor_frame_l, sensor_frame_r, sensor_frame_lidar, sensor_frame_radar, sensor_frame_depth, sensor_frame_seg]
+                    if all(f == self.next_frame_id for f in frames):
+                        image_left = bgr_img_l
+                        image_right = bgr_img_r
+                        lidar_data = l_data
+                        radar_data = r_data
+                        depth_img = d_img
+                        seg_img = s_img
                         break
-                    elif sensor_frame < self.next_frame_id:
+                    elif any(f < self.next_frame_id for f in frames):
                         # 古いフレームは破棄
                         continue
                     else:
-                        # もし期待するフレームより新しいフレームが届いた場合は、
-                        # 同期ズレが発生しているので、それを採用した上で next_frame_id を更新する
-                        print(f"[WARNING] Sync drift detected. Expected {self.next_frame_id}, got {sensor_frame}. Adjusting sync frame.")
-                        self.next_frame_id = sensor_frame
-                        image = bgr_img
+                        # 同期ズレ
+                        max_frame = max(frames)
+                        print(f"[WARNING] Sync drift detected. Expected {self.next_frame_id}, got {max_frame}. Adjusting sync frame.")
+                        self.next_frame_id = max_frame
+                        image_left = bgr_img_l
+                        image_right = bgr_img_r
+                        lidar_data = l_data
+                        radar_data = r_data
+                        depth_img = d_img
+                        seg_img = s_img
                         break
                 except queue.Empty:
                     break
             
-            if image is None:
-                # タイムアウトやドロップ時は警告を出し、黒画面で補完
-                print(f"[WARNING] Mismatched or dropped camera frame for tick {self.next_frame_id}. Perception will fall back.")
-                image = np.zeros((720, 1280, 3), dtype=np.uint8)
+            if image_left is None:
+                print(f"[WARNING] Mismatched or dropped sensor frame for tick {self.next_frame_id}. Perception will fall back.")
+                image_left = np.zeros((720, 1280, 3), dtype=np.uint8)
+                image_right = np.zeros((720, 1280, 3), dtype=np.uint8)
+                depth_img = np.zeros((720, 1280, 4), dtype=np.uint8)
+                seg_img = np.zeros((720, 1280, 4), dtype=np.uint8)
+            
+            # --- HSC合成 ---
+            if hasattr(self, 'hsc_emulator') and depth_img is not None and seg_img is not None:
+                hsc_image = self.hsc_emulator.synthesize(image_left, depth_img, seg_img)
+            else:
+                hsc_image = image_left
+                
                 
             # 2. このフレームにおける最新の物理状態を取得する
             # これにより、取得した画像と物理状態が完全に同じフレームID (self.next_frame_id) のもので同期する！
@@ -555,9 +681,35 @@ class CameraOnlyExperiment:
                         control = carla.VehicleControl(throttle=0.8, steer=0.0)
                         self.target_actor.apply_control(control)
             
-            yolo_detections = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
+            yolo_detections = self.evaluator.evaluate_multi(image_left, image_right=image_right, ego_speed=ego_vel[0])
+            image = image_left # 下流の可視化コード等で参照されるため互換性維持
             
             gt_obstacles = []
+            
+            # --- LiDAR/Radar 距離・速度の実測 ---
+            if lidar_data is not None:
+                lidar_points = np.frombuffer(lidar_data.raw_data, dtype=np.float32)
+                lidar_points = np.reshape(lidar_points, (-1, 4))
+                # X > 0 (前方), |Y| < 2.0 (車線幅内)
+                front_points = lidar_points[(lidar_points[:, 0] > 0) & (np.abs(lidar_points[:, 1]) < 2.0)]
+                if len(front_points) > 0:
+                    closest_idx = np.argmin(front_points[:, 0])
+                    measured_distance = front_points[closest_idx, 0]
+                    measured_lateral = front_points[closest_idx, 1]
+
+            if radar_data is not None:
+                radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32)
+                radar_points = np.reshape(radar_points, (-1, 4))
+                # |azimuth| < 0.1 rad (真正面付近)
+                front_radar = radar_points[np.abs(radar_points[:, 1]) < 0.1]
+                if len(front_radar) > 0:
+                    closest_idx = np.argmin(front_radar[:, 3]) # depth最小
+                    measured_rel_vel = front_radar[closest_idx, 0] # CARLA radar: positive is approaching
+                    measured_radar_dist = front_radar[closest_idx, 3]
+                    
+            v_ego_norm = np.linalg.norm(ego_vel)
+            measured_target_vel = max(0.0, v_ego_norm - measured_rel_vel) if len(front_radar if radar_data is not None else []) > 0 else 0.0
+            
             if self.target_actor is not None and self.target_actor.is_alive:
                 t_trans = self.target_actor.get_transform()
                 t_vel_vec = self.target_actor.get_velocity()
@@ -682,13 +834,43 @@ class CameraOnlyExperiment:
             control.steer = float(steer_cmd)
             self.ego_vehicle.apply_control(control)
 
-        # 4. 知覚リスク・物理リスク・パラメータ決定の計算
-        r_perceived, r_gt, gap, info = self.risk_calculator.calculate_multi_risk(
+        # 4. フュージョンリスクと過去の比較用リスクの計算
+        measured_class = 'unknown'
+        min_yolo_d = float('inf')
+        for det in yolo_detections:
+            if det.get('z_distance') is not None and det['z_distance'] < min_yolo_d:
+                min_yolo_d = det['z_distance']
+                measured_class = det['class']
+                
+        # 距離フュージョン戦略 (Phantom Braking 回避)
+        dist_lidar = measured_distance if measured_distance is not None else float('inf')
+        dist_camera = min_yolo_d
+        dist_radar = measured_radar_dist if measured_radar_dist is not None else float('inf')
+        
+        # 基本ルール: 安全側（近い方）を採用
+        fused_dist = min(dist_lidar, dist_camera)
+        
+        # ノイズ棄却ルール: LiDARが3m以内に物体を検出しているが、カメラもレーダーも遠方しか見ていない場合、
+        # LiDARの悪天候バックスキャッターノイズ（雨粒ゴースト）とみなして棄却。
+        if dist_lidar < 3.0 and dist_camera > 10.0 and dist_radar > 10.0:
+            fused_dist = dist_camera
+            
+        dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
+        
+        r_fusion, info = self.risk_calculator.calculate_fusion_risk(
+            measured_distance=dist_for_risk,
+            measured_rel_vel=measured_rel_vel if 'measured_rel_vel' in locals() else 0.0,
+            measured_class=measured_class,
+            lateral_offset=measured_lateral if 'measured_lateral' in locals() else 0.0
+        )
+        
+        # 後方互換性のため、以前のcalculate_multi_riskも並行して呼び出す
+        r_perceived, r_gt, gap_multi, multi_info = self.risk_calculator.calculate_multi_risk(
             ego_pos, ego_vel, gt_obstacles, yolo_detections
         )
         
-        per_params = info['worst_perceived_params']
-        gt_params = info['worst_gt_params']
+        # Optuna最適化の目的関数としての Gap は以前のものをそのまま引き継ぐ（解析互換性）
+        gap = gap_multi
         
         if not hasattr(self, 'max_gap_this_run'):
             self.max_gap_this_run = -float('inf')
@@ -701,6 +883,13 @@ class CameraOnlyExperiment:
                 self.worst_case_image = image.copy()
             self.worst_case_step = self.time_step
         
+        # GT距離の計算
+        dist_gt = -1.0
+        if not self.demo_mode and hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None and self.target_actor is not None and self.target_actor.is_alive:
+            dist_gt = self.ego_vehicle.get_transform().location.distance(self.target_actor.get_transform().location)
+        elif self.demo_mode and len(self.mock_env.obstacles) > 0:
+            dist_gt = np.linalg.norm(np.array(self.mock_env.obstacles[0]['pos'], dtype=float) - np.array(ego_pos, dtype=float))
+            
         # 5. 時系列ロギング
         log_entry = {
             'step': self.time_step,
@@ -708,21 +897,26 @@ class CameraOnlyExperiment:
             'ego_x': ego_pos[0],
             'ego_y': ego_pos[1],
             'ego_vx': ego_vel[0],
-            'worst_obstacle': info['worst_obstacle'],
-            'worst_gt_distance': info['worst_gt_distance'],
-            'worst_yolo_distance': info['worst_yolo_distance'],
+            'worst_obstacle': measured_class,
+            'fusion_distance': dist_for_risk,
+            'dist_lidar': dist_lidar,
+            'dist_camera': dist_camera,
+            'dist_gt': dist_gt,
+            'r_fusion': r_fusion,
             'r_perceived': r_perceived,
             'r_gt': r_gt,
             'perception_gap': gap,
-            'mu_perceived': per_params.get('mu', 1.0),
-            'mu_gt': gt_params.get('mu', 1.0),
-            'omega_perceived': per_params.get('omega', 0.0),
-            'omega_gt': gt_params.get('omega', 0.0),
-            'alpha_perceived': per_params.get('alpha', 1.0),
-            'alpha_gt': gt_params.get('alpha', 1.0),
-            'beta_perceived': per_params.get('beta', 1.0),
-            'beta_gt': gt_params.get('beta', 1.0),
-            'offset_y': offset_y,
+            'mu': info.get('mu', 1.0),
+            'mu_perceived': multi_info.get('mu_perceived', 1.0),
+            'mu_gt': multi_info.get('mu_gt', 1.0),
+            'omega': info.get('omega', 0.0),
+            'omega_gt': multi_info.get('omega_gt', 0.0),
+            'omega_perceived': multi_info.get('omega_perceived', 0.0),
+            'alpha': info.get('alpha', 1.0),
+            'beta': info.get('beta', 1.0),
+            'worst_gt_distance': multi_info.get('worst_gt_distance', 0.0),
+            'worst_yolo_distance': multi_info.get('worst_yolo_distance', float('inf')),
+            'offset_y': error_y if 'error_y' in locals() else 0.0,
             'steer': steer_cmd,
             'accel': accel_cmd
         }
@@ -894,7 +1088,8 @@ class CameraOnlyExperiment:
             log = self.run_step(current_seq, target_speed_kph)
             
             if tick % 10 == 0:
-                print(f"Seq [{current_seq}] Step {tick} (ScenTick {log['scenario_ticks']}): Ego X={log['ego_x']:.1f}m, Y={log['ego_y']:.2f}m | worst={log['worst_obstacle']} | Gap={log['perception_gap']:.2f} | mu_perc={log['mu_perceived']:.1f}, mu_gt={log['mu_gt']:.1f}")
+                mu_val = log.get('mu', 1.0)
+                print(f"Seq [{current_seq}] Step {tick} (ScenTick {log['scenario_ticks']}): Ego X={log['ego_x']:.1f}m, Y={log['ego_y']:.2f}m | worst={log['worst_obstacle']} | FusionRisk={log['r_fusion']:.2f} | mu={mu_val:.1f} | dist(GT/LiDAR/Cam): {log.get('dist_gt', -1):.1f}/{log.get('dist_lidar', -1):.1f}/{log.get('dist_camera', -1):.1f}")
             
             if self.clear_flag:
                 ego_pos_x = log['ego_x']

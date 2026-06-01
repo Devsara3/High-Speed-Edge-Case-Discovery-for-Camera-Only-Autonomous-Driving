@@ -98,6 +98,64 @@ class RiskCalculator:
         }
 
         return r_perceived, debug_info
+        
+    def calculate_fusion_risk(self, measured_distance, measured_rel_vel, measured_class, lateral_offset=0.0):
+        """
+        センサーフュージョンによる統合リスクを計算します。
+        
+        :param measured_distance: LiDAR等で計測された直線距離 (r_hat)
+        :param measured_rel_vel: Radar等で計測された相対接近速度 (approach_speed) (正なら接近)
+        :param measured_class: YOLO等で認識されたクラス名 (muに影響)
+        :param lateral_offset: LiDAR等から得られた横方向のズレ（betaに影響）
+        :return: 統合リスクスコア, デバッグ情報
+        """
+        if measured_distance is None or measured_distance <= 0:
+            return 0.0, {
+                'omega': 0.0, 'alpha': 1.0, 'beta': 1.0, 'mu': 1.0,
+                'approach_speed': 0.0, 'distance': float('inf')
+            }
+            
+        r_hat = measured_distance
+        approach_speed = measured_rel_vel
+        
+        # 2. omega: 相互作用の重み
+        if approach_speed > 0:
+            omega = 1.0 # 接近中
+        else:
+            omega = 0.1 # 離脱中
+            
+        # 3. alpha: 接近速度による増幅因子
+        alpha = np.exp(self.kappa * max(0, approach_speed))
+        
+        # 4. beta: 横方向の減衰因子
+        if r_hat > 1e-3:
+            sin_theta = lateral_offset / r_hat
+            sin_theta_sq = sin_theta ** 2
+            beta = np.exp(-2.0 * sin_theta_sq)
+        else:
+            beta = 1.0
+            
+        # 5. mu: 車種係数
+        mu = self.class_mu_table.get(measured_class, 1.0)
+        
+        # 6. 最終的なフュージョンリスクの計算
+        numerator = omega * mu * alpha * beta
+        denominator = (r_hat ** 2) + self.epsilon
+        
+        r_fusion = self.K * (numerator / denominator) + self.C
+        
+        debug_info = {
+            'omega': omega,
+            'alpha': alpha,
+            'beta': beta,
+            'mu': mu,
+            'approach_speed': approach_speed,
+            'distance': r_hat,
+            'numerator': numerator,
+            'denominator': denominator
+        }
+        
+        return r_fusion, debug_info
 
     def calculate_multi_risk(self, ego_pos, ego_vel, gt_obstacles, yolo_detections):
         """

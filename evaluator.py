@@ -18,13 +18,26 @@ class YoloEvaluator:
     """
     YOLOv8を用いて画像中の物体を検出し、認識精度（スコア）を評価するクラス。
     """
-    def __init__(self, model_name='yolov8n.pt'):
+    def __init__(self, model_name='yolov8m.pt'):
         """
         モデルの初期化。初回はインターネットからダウンロードされます。
         """
         self.model = YOLO(model_name)
         # 車や歩行者など、注目するクラスID (COCO dataset: 0:person, 1:bicycle, 2:car, 3:motorcycle, 5:bus, 7:truck, 9:traffic light, 11:stop sign)
         self.target_classes = [0, 1, 2, 3, 5, 7, 9, 11]
+        
+        # ステレオマッチング器の初期化
+        self.stereo = cv2.StereoSGBM_create(
+            minDisparity=0,
+            numDisparities=64, # 16の倍数
+            blockSize=5,
+            P1=8 * 3 * 5 ** 2,
+            P2=32 * 3 * 5 ** 2,
+            disp12MaxDiff=1,
+            uniquenessRatio=10,
+            speckleWindowSize=100,
+            speckleRange=32
+        )
 
         # 深層学習深度推定モデル (MiDaS) のロード試行 (実用的な単眼3D検出システムとして機能させます)
         try:
@@ -112,11 +125,19 @@ class YoloEvaluator:
         
         return 'unknown'
 
-    def evaluate_multi(self, image, return_image=False, ego_speed=0.0):
+    def evaluate_multi(self, image_left, image_right=None, return_image=False, ego_speed=0.0):
         """
-        画像を推論し、検出したすべてのオブジェクトの詳細リストを返します。
+        画像を推論し、検出したすべてのオブジェクトの詳細リストを返します。ステレオ画像がある場合は高精度な距離計算を行います。
         """
-        processed_image = image.copy()
+        processed_image = image_left.copy()
+        
+        # ステレオマッチングの事前計算
+        disparity_map = None
+        if image_right is not None:
+            gray_left = cv2.cvtColor(image_left, cv2.COLOR_BGR2GRAY)
+            gray_right = cv2.cvtColor(image_right, cv2.COLOR_BGR2GRAY)
+            disparity_map = self.stereo.compute(gray_left, gray_right).astype(np.float32) / 16.0
+            
         results = self.model(processed_image, verbose=False, conf=0.1)
         detections = []
         
@@ -166,8 +187,24 @@ class YoloEvaluator:
                     
                     z_dist = float('inf')
                     
+                    # 0. ステレオカメラ (SGBM) による視差ベースの距離推定
+                    if disparity_map is not None:
+                        bx1, by1 = max(0, x1), max(0, y1)
+                        bx2, by2 = min(int(img_width) - 1, x2), min(int(img_height) - 1, y2)
+                        if bx2 > bx1 and by2 > by1:
+                            box_disp = disparity_map[by1:by2, bx1:bx2]
+                            valid_disp = box_disp[box_disp > 0]
+                            if len(valid_disp) > 0:
+                                median_disp = np.median(valid_disp)
+                                # Z = (focal_length * baseline) / disparity
+                                # ベースラインは 0.54m に設定
+                                if median_disp > 0:
+                                    z_stereo = (focal_length * 0.54) / median_disp
+                                    if 0.1 <= z_stereo <= 150.0:
+                                        z_dist = z_stereo
+                    
                     # 1. AI距離推定器 (DistanceRegressor) による予測試行
-                    if self.distance_regressor is not None and HAS_TORCH:
+                    if np.isinf(z_dist) and self.distance_regressor is not None and HAS_TORCH:
                         try:
                             input_tensor = torch.tensor([[is_ped, is_car, is_signal, is_tl, y_bottom, height_norm, width_norm, ego_speed]], dtype=torch.float32)
                             with torch.no_grad():
