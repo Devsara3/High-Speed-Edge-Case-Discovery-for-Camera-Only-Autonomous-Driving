@@ -809,7 +809,8 @@ class CameraOnlyExperiment:
                     'color': 'red' if act_class == 'traffic_light' else None
                 })
 
-        # 2. 繧ｫ繝｡繝ｩ隱崎ｭ假ｼ・OLO3D・峨・縺ｿ縺ｫ蝓ｺ縺･縺剰ｵｰ陦悟宛蠕｡・亥刈貂幃溘・蝗樣∩謫崎扱・峨・險育ｮ・        closest_hazard = None
+        # カメラ認識のみに基づく走行制御
+        closest_hazard = None
         min_hazard_dist = float('inf')
         offset_y = 0.0
         
@@ -1069,7 +1070,8 @@ class CameraOnlyExperiment:
                     print(f"[CRASH] Collision detected! Min Distance: {current_min_dist:.2f}m")
                     
         log_entry['min_gt_distance'] = self.scenario_min_distance
-        # HUD縺ｮ繝・く繧ｹ繝域緒逕ｻ縺ｨ蜍慕判菫晏ｭ・        cv2.putText(image, f"Risk: {r_fusion:.2f} | Gap: {gap:.2f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255) if r_fusion > 1.0 else (0, 255, 0), 2)
+        # HUDのテキスト描画と動画保存
+        cv2.putText(image, f"Risk: {r_fusion:.2f} | Gap: {gap:.2f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255) if r_fusion > 1.0 else (0, 255, 0), 2)
         cv2.putText(image, f"Action: {'Brake' if accel_cmd < 0 else 'Cruise'} | Steer: {steer_cmd:.2f}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
         cv2.putText(image, f"Dist (L/C/F): {global_dist_lidar:.1f} / {global_dist_camera:.1f} / {fused_dist:.1f}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
