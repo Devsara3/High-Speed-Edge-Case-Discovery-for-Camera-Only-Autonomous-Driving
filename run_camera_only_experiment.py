@@ -26,7 +26,9 @@ class CameraOnlyExperiment:
     """
     繧ｫ繝｡繝ｩ蜊倅ｸ繧ｻ繝ｳ繧ｵ繝ｼ・・amera-Only・峨↓繧医ｋ讓呎ｺ泡DAS繧ｷ繝翫Μ繧ｪ螳滄ｨ楢ｵｰ陦檎ｮ｡逅・け繝ｩ繧ｹ縲・    螳滓ｩ櫃ARLA縺翫ｈ縺ｳ繧ｪ繝輔Λ繧､繝ｳ繝｢繝・け・・-demo・峨・荳｡譁ｹ繧偵し繝昴・繝医＠縺ｾ縺吶・    """
     def __init__(self, demo_mode=True, host='localhost', port=2000):
-        self.demo_mode = demo_mode or not CARLA_AVAILABLE
+        self.demo_mode = demo_mode
+        self.record_video = record_video
+        self.video_frames = [] or not CARLA_AVAILABLE
         self.evaluator = YoloEvaluator()
         self.risk_calculator = RiskCalculator()
         self.hsc_emulator = HSCEmulator()
@@ -975,6 +977,9 @@ class CameraOnlyExperiment:
             if image is not None:
                 self.worst_case_image = image.copy()
             self.worst_case_step = self.time_step
+
+        if self.record_video and image is not None:
+            self.video_frames.append(image.copy())
         
         # GT霍晞屬縺ｮ險育ｮ・        dist_gt = -1.0
 
@@ -1341,6 +1346,22 @@ class CameraOnlyExperiment:
                         break
                         
             self._save_worst_image(seq)
+
+        
+        if self.record_video and len(self.video_frames) > 0:
+            import cv2
+            import os
+            import time
+            os.makedirs("results/videos", exist_ok=True)
+            h, w = self.video_frames[0].shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            video_path = f"results/videos/sequence_{seq}_{int(time.time())}.mp4"
+            out = cv2.VideoWriter(video_path, fourcc, 20.0, (w, h))
+            for frame in self.video_frames:
+                out.write(frame)
+            out.release()
+            print(f"[INFO] Saved sequence video to {video_path}")
+            self.video_frames = []
 
         if not self.demo_mode:
             self._destroy_actors()

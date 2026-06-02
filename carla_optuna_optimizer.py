@@ -11,7 +11,7 @@ import pandas as pd
 import optuna
 from run_camera_only_experiment import CameraOnlyExperiment
 
-def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', demo_mode=True, mode='exploit'):
+def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', demo_mode=True, mode='exploit', record_video=False):
     """
     Optunaによる天候パラメータ探索を実行。
     """
@@ -41,7 +41,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         fog_density = trial.suggest_float("fog_density", 0.0, 100.0)
         
         # 実験インスタンスの初期化
-        experiment = CameraOnlyExperiment(demo_mode=demo_mode)
+        experiment = CameraOnlyExperiment(demo_mode=demo_mode, record_video=record_video)
         
         edge_case_img_file = ""
         try:
@@ -143,4 +143,4 @@ if __name__ == "__main__":
     parser.add_argument("--demo", action="store_true", help="Run in mock/demo mode without CARLA server")
     args = parser.parse_args()
     
-    run_optuna_search(n_trials=args.trials, sampler_name=args.sampler, scenario_name=args.scenario, demo_mode=args.demo, mode=args.mode)
+    run_optuna_search(n_trials=args.trials, sampler_name=args.sampler, scenario_name=args.scenario, demo_mode=args.demo, mode=args.mode, record_video=args.video)
