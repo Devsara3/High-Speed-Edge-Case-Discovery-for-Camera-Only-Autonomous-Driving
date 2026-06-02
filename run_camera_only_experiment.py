@@ -1395,6 +1395,10 @@ class CameraOnlyExperiment:
             self._destroy_actors()
             self.world.apply_settings(self.original_settings)
             print("[INFO] CARLA synchronous mode disabled.")
+            
+        # シミュレーション終了時にCSVデータを自動エクスポート
+        self.export_training_data()
+        self.export_log_data()
 
     def get_max_gap(self):
         return getattr(self, 'max_gap_this_run', 0.0)
@@ -1403,14 +1407,22 @@ class CameraOnlyExperiment:
         return getattr(self, 'worst_case_image', None)
 
     def export_training_data(self, filepath="results/distance_training_data.csv"):
-
         if not self.training_data:
-            print("[WARNING] No training data collected to export.")
             return
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         df = pd.DataFrame(self.training_data)
-        df.to_csv(filepath, index=False)
-        print(f"[SUCCESS] Exported {len(df)} distance training samples to {filepath}")
+        # 複数トライアルで蓄積するため追記モード(a)で保存
+        df.to_csv(filepath, mode='a', header=not os.path.exists(filepath), index=False)
+        print(f"[SUCCESS] Appended {len(df)} distance training samples to {filepath}")
+
+    def export_log_data(self, filepath="results/experiment_log.csv"):
+        if not self.log_data:
+            return
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        df = pd.DataFrame(self.log_data)
+        # 複数トライアルで蓄積するため追記モード(a)で保存
+        df.to_csv(filepath, mode='a', header=not os.path.exists(filepath), index=False)
+        print(f"[SUCCESS] Appended {len(df)} experiment log entries to {filepath}")
 
 
 if __name__ == "__main__":
