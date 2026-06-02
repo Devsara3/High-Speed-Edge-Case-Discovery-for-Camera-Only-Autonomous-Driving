@@ -63,7 +63,6 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
             # 最悪結果の更新と可視化グラフ保存
             if max_gap > worst_gap:
                 worst_gap = max_gap
-                experiment.visualize_and_save(f"results/optuna_worst_{scenario_name}.png")
                 
                 worst_img = experiment.get_worst_image()
                 if worst_img is not None:

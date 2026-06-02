@@ -12,8 +12,6 @@ from risk_calculator import RiskCalculator
 from evaluator import YoloEvaluator
 from carla_mock import MockCarlaEnv
 
-from hsc_emulator import HSCEmulator
-
 # CARLA縺ｮ繧､繝ｳ繝昴・繝郁ｩｦ陦・
 try:
     import carla
@@ -24,14 +22,13 @@ except ImportError:
 
 class CameraOnlyExperiment:
     """
-    繧ｫ繝｡繝ｩ蜊倅ｸ繧ｻ繝ｳ繧ｵ繝ｼ・・amera-Only・峨↓繧医ｋ讓呎ｺ泡DAS繧ｷ繝翫Μ繧ｪ螳滄ｨ楢ｵｰ陦檎ｮ｡逅・け繝ｩ繧ｹ縲・    螳滓ｩ櫃ARLA縺翫ｈ縺ｳ繧ｪ繝輔Λ繧､繝ｳ繝｢繝・け・・-demo・峨・荳｡譁ｹ繧偵し繝昴・繝医＠縺ｾ縺吶・    """
+    繧ｫ繝｡繝ｩ蜊倅ｸ€繧ｻ繝ｳ繧ｵ繝ｼ・・amera-Only・峨↓繧医ｋ讓呎ｺ泡DAS繧ｷ繝翫Μ繧ｪ螳滄ｨ楢ｵｰ陦檎ｮ｡逅・け繝ｩ繧ｹ縲・    螳滓ｩ櫃ARLA縺翫ｈ縺ｳ繧ｪ繝輔Λ繧､繝ｳ繝｢繝・け・・-demo・峨・荳｡譁ｹ繧偵し繝昴・繝医＠縺ｾ縺吶€・    """
     def __init__(self, demo_mode=True, host='localhost', port=2000, record_video=False):
         self.demo_mode = demo_mode or not CARLA_AVAILABLE
         self.record_video = record_video
         self.video_frames = []
         self.evaluator = YoloEvaluator()
         self.risk_calculator = RiskCalculator()
-        self.hsc_emulator = HSCEmulator()
         self.camera_type = 'RGB' # 繝・ヵ繧ｩ繝ｫ繝医・RGB
         self.actors = []
         self.training_data = []
@@ -71,7 +68,7 @@ class CameraOnlyExperiment:
             base_img = "base_image.png"
 
             if not os.path.exists(base_img):
-                # 繝繝溘・逕ｻ蜒上ｒ菴懈・
+                # 繝€繝溘・逕ｻ蜒上ｒ菴懈・
                 dummy_img = np.zeros((720, 1280, 3), dtype=np.uint8)
                 cv2.putText(dummy_img, "CARLA CAMERA ONLY DEMO", (200, 360),
                             cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
@@ -99,7 +96,7 @@ class CameraOnlyExperiment:
 
     def _setup_mock_scenario(self, name, ego_speed_kph, gap=12.0, deceleration=-6.0):
         """
-        繝｢繝・け迺ｰ蠅・↓縺翫￠繧句推繧ｷ繝翫Μ繧ｪ縺ｮ迚ｩ逅・ｪｨ譬ｼ・亥・譛滉ｽ咲ｽｮ繝ｻ騾溷ｺｦ繝ｻ霆碁％・峨ｒ蛻晄悄蛹悶＠縺ｾ縺吶・        """
+        繝｢繝・け迺ｰ蠅・↓縺翫￠繧句推繧ｷ繝翫Μ繧ｪ縺ｮ迚ｩ逅・ｪｨ譬ｼ・亥・譛滉ｽ咲ｽｮ繝ｻ騾溷ｺｦ繝ｻ霆碁％・峨ｒ蛻晄悄蛹悶＠縺ｾ縺吶€・        """
         self.mock_env.reset()
         self.time_step = 0
         self.scenario_ticks = 0
@@ -119,7 +116,7 @@ class CameraOnlyExperiment:
         # ターゲットアクター
 
         if name == 'A':
-            # 繧ｷ繝翫Μ繧ｪA (CPNA: 豁ｩ陦瑚・ｨｪ譁ｭ)
+            # 繧ｷ繝翫Μ繧ｪA (CPNA: 豁ｩ陦瑚€・ｨｪ譁ｭ)
             v_ped = 1.39 # 5 km/h
             dist_cross = 30.0 # 讓ｪ譁ｭ菴咲ｽｮ X=30m
             t_walk = 3.0 / v_ped
@@ -136,7 +133,7 @@ class CameraOnlyExperiment:
             print(f"[Scenario A Setup] Ego Speed: {ego_speed_kph} km/h ({v_ego:.2f} m/s). Pedestrian at X={dist_cross}m, starts walking when Ego travels {self.trigger_dist:.2f}m")
             
         elif name == 'B':
-            # 繧ｷ繝翫Μ繧ｪB (CCRb: 蜈郁｡瑚ｻ頑･蛻ｶ蜍・
+            # 繧ｷ繝翫Μ繧ｪB (CCRb: 蜈郁｡瑚ｻ頑€･蛻ｶ蜍・
             self.lead_decel_started = False
             self.lead_decel_ticks = 40 # 2遘貞ｾ・40ticks)縺ｫ諤･繝悶Ξ繝ｼ繧ｭ
             self.lead_deceleration = deceleration
@@ -187,7 +184,7 @@ class CameraOnlyExperiment:
 
     def _setup_real_scenario(self, name, ego_speed_kph, gap=12.0, deceleration=-6.0):
         """
-        螳滓ｩ櫃ARLA繧ｷ繝溘Η繝ｬ繝ｼ繧ｿ縺ｫ縺翫￠繧句推繧ｷ繝翫Μ繧ｪ縺ｮ迚ｩ逅・ｪｨ譬ｼ・医い繧ｯ繧ｿ繝ｼ驟咲ｽｮ縲・溷ｺｦ蛻ｶ蠕｡蛻晄悄蛹厄ｼ・        """
+        螳滓ｩ櫃ARLA繧ｷ繝溘Η繝ｬ繝ｼ繧ｿ縺ｫ縺翫￠繧句推繧ｷ繝翫Μ繧ｪ縺ｮ迚ｩ逅・ｪｨ譬ｼ・医い繧ｯ繧ｿ繝ｼ驟咲ｽｮ縲・€溷ｺｦ蛻ｶ蠕｡蛻晄悄蛹厄ｼ・        """
         self._destroy_actors()
         
         self.time_step = 0
@@ -203,13 +200,13 @@ class CameraOnlyExperiment:
         ego_transform = spawn_points[0]
         target_tl = None
         
-        # Scenario E 縺ｮ蝣ｴ蜷医∽ｺ句燕縺ｫ菫｡蜿ｷ讖溘′縺ゅｋ莠､蟾ｮ轤ｹ縺ｮ謇句燕縺ｮ繧ｹ繝昴・繝ｳ繝昴う繝ｳ繝医ｒ謗｢縺・
+        # Scenario E 縺ｮ蝣ｴ蜷医€∽ｺ句燕縺ｫ菫｡蜿ｷ讖溘′縺ゅｋ莠､蟾ｮ轤ｹ縺ｮ謇句燕縺ｮ繧ｹ繝昴・繝ｳ繝昴う繝ｳ繝医ｒ謗｢縺・
         if name == 'E':
             best_spawn = spawn_points[0]
             for sp in spawn_points:
                 wp = self.world.get_map().get_waypoint(sp.location)
                 found = False
-                for _ in range(20): # 譛螟ｧ40m蜑肴婿繧呈爾邏｢
+                for _ in range(20): # 譛€螟ｧ40m蜑肴婿繧呈爾邏｢
                     next_wps = wp.next(2.0)
 
                     if not next_wps:
@@ -429,10 +426,10 @@ class CameraOnlyExperiment:
             except queue.Empty:
                 break
         
-        # 譛蛻昴・繧ｹ繝・ャ繝励・縺溘ａ縺ｫ縲∵怙蛻昴・ world.tick() 繧貞他繧薙〒縺翫￥
+        # 譛€蛻昴・繧ｹ繝・ャ繝励・縺溘ａ縺ｫ縲∵怙蛻昴・ world.tick() 繧貞他繧薙〒縺翫￥
         self.next_frame_id = self.world.tick()
         
-        # 譌∬ｧり・ｧ・ｧ抵ｼ夊ｽｦ蟆ｾ蜷惹ｸ頑婿
+        # 譌∬ｧり€・ｧ・ｧ抵ｼ夊ｽｦ蟆ｾ蜷惹ｸ頑婿
         self._update_spectator()
 
     def _update_spectator(self):
@@ -493,7 +490,7 @@ class CameraOnlyExperiment:
 
     def run_step(self, scenario_name, target_speed_kph):
         """
-        1繧ｷ繝溘Η繝ｬ繝ｼ繧ｷ繝ｧ繝ｳ繧ｹ繝・ャ繝励ｒ螳溯｡後ょ宛蠕｡縲∬ｪ崎ｭ假ｼ・OLO3D・峨√Μ繧ｹ繧ｯ險育ｮ励√Ο繧ｮ繝ｳ繧ｰ縲・        """
+        1繧ｷ繝溘Η繝ｬ繝ｼ繧ｷ繝ｧ繝ｳ繧ｹ繝・ャ繝励ｒ螳溯｡後€ょ宛蠕｡縲∬ｪ崎ｭ假ｼ・OLO3D・峨€√Μ繧ｹ繧ｯ險育ｮ励€√Ο繧ｮ繝ｳ繧ｰ縲・        """
         dt = 0.05
         self.time_step += 1
         self.scenario_ticks += 1
@@ -551,7 +548,7 @@ class CameraOnlyExperiment:
             image = self.mock_env.get_image()
             _ = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
             
-            # 蟷ｾ菴募ｭｦ蠎ｧ讓吶↓蝓ｺ縺･縺阪∝､ｩ蛟吶・蠖ｱ髻ｿ繧帝←逕ｨ縺励◆隱崎ｭ倡ｵ先棡繧堤函謌・
+            # 蟷ｾ菴募ｭｦ蠎ｧ讓吶↓蝓ｺ縺･縺阪€∝､ｩ蛟吶・蠖ｱ髻ｿ繧帝←逕ｨ縺励◆隱崎ｭ倡ｵ先棡繧堤函謌・
             yolo_detections = []
             img_width = 1280.0
             img_height = 720.0
