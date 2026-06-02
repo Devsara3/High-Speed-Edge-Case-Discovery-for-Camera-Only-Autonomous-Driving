@@ -25,10 +25,10 @@ except ImportError:
 class CameraOnlyExperiment:
     """
     繧ｫ繝｡繝ｩ蜊倅ｸ繧ｻ繝ｳ繧ｵ繝ｼ・・amera-Only・峨↓繧医ｋ讓呎ｺ泡DAS繧ｷ繝翫Μ繧ｪ螳滄ｨ楢ｵｰ陦檎ｮ｡逅・け繝ｩ繧ｹ縲・    螳滓ｩ櫃ARLA縺翫ｈ縺ｳ繧ｪ繝輔Λ繧､繝ｳ繝｢繝・け・・-demo・峨・荳｡譁ｹ繧偵し繝昴・繝医＠縺ｾ縺吶・    """
-    def __init__(self, demo_mode=True, host='localhost', port=2000):
-        self.demo_mode = demo_mode
+    def __init__(self, demo_mode=True, host='localhost', port=2000, record_video=False):
+        self.demo_mode = demo_mode or not CARLA_AVAILABLE
         self.record_video = record_video
-        self.video_frames = [] or not CARLA_AVAILABLE
+        self.video_frames = []
         self.evaluator = YoloEvaluator()
         self.risk_calculator = RiskCalculator()
         self.hsc_emulator = HSCEmulator()
@@ -53,13 +53,15 @@ class CameraOnlyExperiment:
         self.scenario_ticks = 0
         self.trigger_dist = 0.0         # 髢句ｧ倶ｽ咲ｽｮ縺九ｉ縺ｮ繝医Μ繧ｬ繝ｼ霍晞屬
         
-        # PID繧ｳ繝ｳ繝医Ο繝ｼ繝ｩ逕ｨ繝代Λ繝｡繝ｼ繧ｿ・域ｨｪ譁ｹ蜷托ｼ・        self.kp_lateral = 1.0
+        # PID繧ｳ繝ｳ繝医Ο繝ｼ繝ｩ逕ｨ繝代Λ繝｡繝ｼ繧ｿ・域ｨｪ譁ｹ蜷托ｼ・
+        self.kp_lateral = 1.0
         self.kd_lateral = 0.2
         self.ki_lateral = 0.02
         self.integral_error_lat = 0.0
         self.prev_error_lat = 0.0
         
-        # PID繧ｳ繝ｳ繝医Ο繝ｼ繝ｩ逕ｨ繝代Λ繝｡繝ｼ繧ｿ・育ｸｦ譁ｹ蜷托ｼ・        self.kp_long = 0.8
+        # PID繧ｳ繝ｳ繝医Ο繝ｼ繝ｩ逕ｨ繝代Λ繝｡繝ｼ繧ｿ・育ｸｦ譁ｹ蜷托ｼ・        # PIDコントローラ用パラメータ（縦方向）
+        self.kp_long = 0.8
         self.kd_long = 0.15
         self.prev_error_long = 0.0
 
@@ -109,7 +111,8 @@ class CameraOnlyExperiment:
         self.worst_case_image = None
         self.worst_case_step = 0
         
-        # Ego蛻晄悄菴咲ｽｮ繝ｻ騾溷ｺｦ險ｭ螳・        v_ego = (ego_speed_kph / 3.6)
+        # Ego蛻晄悄菴咲ｽｮ繝ｻ騾溷ｺｦ險ｭ螳・
+        v_ego = (ego_speed_kph / 3.6)
         self.mock_env.ego_pos = [0.0, 0.0, 0.0]
         self.mock_env.ego_vel = [v_ego, 0.0, 0.0]
         
@@ -336,7 +339,8 @@ class CameraOnlyExperiment:
             array = np.reshape(array, (image.height, image.width, 4))
             self.depth_queue.put((image.frame, array))
         def _on_seg(image):
-            image.convert(carla.ColorConverter.Raw) # Raw ID繧貞叙蠕・            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+            image.convert(carla.ColorConverter.Raw) # Raw ID繧貞叙蠕・
+            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
             self.seg_queue.put((image.frame, array))
             
@@ -418,7 +422,8 @@ class CameraOnlyExperiment:
         for _ in range(5):
             self.world.tick()
 
-        # 鬥ｴ譟薙∪縺帷畑tick縺ｧ繧ｭ繝･繝ｼ縺ｫ貅懊∪縺｣縺溷商縺・判蜒上ｒ縺吶∋縺ｦ蜿悶ｊ蜃ｺ縺励※遐ｴ譽・☆繧・        while not self.image_queue.empty():
+        # 鬥ｴ譟薙∪縺帷畑tick縺ｧ繧ｭ繝･繝ｼ縺ｫ貅懊∪縺｣縺溷商縺・判蜒上ｒ縺吶∋縺ｦ蜿悶ｊ蜃ｺ縺励※遐ｴ譽・☆繧・
+        while not self.image_queue.empty():
             try:
                 self.image_queue.get_nowait()
             except queue.Empty:
@@ -546,7 +551,8 @@ class CameraOnlyExperiment:
             image = self.mock_env.get_image()
             _ = self.evaluator.evaluate_multi(image, ego_speed=ego_vel[0])
             
-            # 蟷ｾ菴募ｭｦ蠎ｧ讓吶↓蝓ｺ縺･縺阪∝､ｩ蛟吶・蠖ｱ髻ｿ繧帝←逕ｨ縺励◆隱崎ｭ倡ｵ先棡繧堤函謌・            yolo_detections = []
+            # 蟷ｾ菴募ｭｦ蠎ｧ讓吶↓蝓ｺ縺･縺阪∝､ｩ蛟吶・蠖ｱ髻ｿ繧帝←逕ｨ縺励◆隱崎ｭ倡ｵ先棡繧堤函謌・
+            yolo_detections = []
             img_width = 1280.0
             img_height = 720.0
             fov_rad = np.radians(110.0)
@@ -598,7 +604,9 @@ class CameraOnlyExperiment:
                             if detected_color in ['red', 'yellow'] and np.random.rand() > visibility:
                                 detected_color = 'green'
                                 
-                        # 蟷ｾ菴募ｭｦ逧・↓BBox繧ｵ繧､繧ｺ縺ｨ菴咲ｽｮ繧帝・ｮ暦ｼ医Δ繝・け逕ｨ繝・・繧ｿ蜿朱寔縺ｮ縺溘ａ・・                        real_w = 1.8
+                        # 蟷ｾ菴募ｭｦ逧・↓BBox繧ｵ繧､繧ｺ縺ｨ菴咲ｽｮ繧帝€・ｮ暦ｼ医Δ繝・け逕ｨ繝・・繧ｿ蜿朱寔縺ｮ縺溘ａ・・
+                        
+                        real_w = 1.8
                         real_h = 1.5
 
                         if obs_class == 'pedestrian':
@@ -632,7 +640,8 @@ class CameraOnlyExperiment:
                         'bbox_width': width_norm
                     })
         else:
-            # 1. 譛溷ｾ・☆繧九ヵ繝ｬ繝ｼ繝ID (self.next_frame_id) 縺ｮ逕ｻ蜒上ｒ繧ｭ繝･繝ｼ縺九ｉ蜿門ｾ励☆繧具ｼ亥酔譛滂ｼ・            image_left = None
+            # 1. 譛溷ｾ・☆繧九ヵ繝ｬ繝ｼ繝ID (self.next_frame_id) 縺ｮ逕ｻ蜒上ｒ繧ｭ繝･繝ｼ縺九ｉ蜿門ｾ励☆繧具ｼ亥酔譛滂ｼ・
+            image_left = None
             image_right = None
             lidar_data = None
             radar_data = None
@@ -660,7 +669,8 @@ class CameraOnlyExperiment:
                         seg_img = s_img
                         break
                     elif any(f < self.next_frame_id for f in frames):
-                        # 蜿､縺・ヵ繝ｬ繝ｼ繝縺ｯ遐ｴ譽・                        continue
+                        # 蜿､縺・ヵ繝ｬ繝ｼ繝縺ｯ遐ｴ譽・
+                        continue
                     else:
                         # 蜷梧悄繧ｺ繝ｬ
                         max_frame = max(frames)
@@ -692,7 +702,8 @@ class CameraOnlyExperiment:
                 hsc_image = image_left
                 
                 
-            # 2. 縺薙・繝輔Ξ繝ｼ繝縺ｫ縺翫￠繧区怙譁ｰ縺ｮ迚ｩ逅・憾諷九ｒ蜿門ｾ励☆繧・            # 縺薙ｌ縺ｫ繧医ｊ縲∝叙蠕励＠縺溽判蜒上→迚ｩ逅・憾諷九′螳悟・縺ｫ蜷後§繝輔Ξ繝ｼ繝ID (self.next_frame_id) 縺ｮ繧ゅ・縺ｧ蜷梧悄縺吶ｋ・・            ego_transform = self.ego_vehicle.get_transform()
+            # 2. 縺薙・繝輔Ξ繝ｼ繝縺ｫ縺翫￠繧区怙譁ｰ縺ｮ迚ｩ逅・憾諷九ｒ蜿門ｾ励☆繧・            # 縺薙ｌ縺ｫ繧医ｊ縲∝叙蠕励＠縺溽判蜒上→迚ｩ逅・憾諷九′螳悟・縺ｫ蜷後§繝輔Ξ繝ｼ繝ID (self.next_frame_id) 縺ｮ繧ゅ・縺ｧ蜷梧悄縺吶ｋ・・
+            ego_transform = self.ego_vehicle.get_transform()
             ego_pos = [ego_transform.location.x, ego_transform.location.y, ego_transform.location.z]
             ego_vel_vec = self.ego_vehicle.get_velocity()
             ego_vel = [ego_vel_vec.x, ego_vel_vec.y, ego_vel_vec.z]
@@ -814,7 +825,8 @@ class CameraOnlyExperiment:
                 
                 # AEB 繝悶Ξ繝ｼ繧ｭ蛻､螳・ 閾ｪ霆願ｵｰ陦後Ξ繝ｼ繝ｳ蜀・(|x_rel| < 1.8m) 縺ｮ蜑肴婿髫懷ｮｳ迚ｩ
                 is_lane_hazard = abs(x_rel) < 1.8
-                # 菫｡蜿ｷ讖滂ｼ郁ｵ､繝ｻ鮟・ｼ峨・蛛懈ｭ｢蛻､螳夲ｼ・騾ｲ陦梧婿蜷・Z)縺ｫ縺ゅｌ縺ｰ豁｢縺ｾ繧・                is_red_light = det['class'] == 'traffic_light' and det.get('traffic_light_color') in ['red', 'yellow']
+                # 菫｡蜿ｷ讖滂ｼ郁ｵ､繝ｻ鮟・ｼ峨・蛛懈ｭ｢蛻､螳夲ｼ・騾ｲ陦梧婿蜷・Z)縺ｫ縺ゅｌ縺ｰ豁｢縺ｾ繧・
+                is_red_light = det['class'] == 'traffic_light' and det.get('traffic_light_color') in ['red', 'yellow']
 
                 
                 if (is_lane_hazard or is_red_light) and z_rel < min_hazard_dist:
@@ -833,9 +845,11 @@ class CameraOnlyExperiment:
             accel_cmd = -1.0  # 繝輔Ν繝悶Ξ繝ｼ繧ｭ
             print(f"[AEB ACTIVE] Hazard detected! Estimated Distance: {min_hazard_dist:.2f}m. Full Braking.")
         elif min_hazard_dist < 18.0:
-            accel_cmd = -0.3  # 隴ｦ蜻頑ｸ幃・        else:
+            accel_cmd = -0.3  # 隴ｦ蜻頑ｸ幃€・
+        
+        else:
             # 騾壼ｸｸ騾溷ｺｦ霑ｽ蠕・(PID)
-            # CARLA縺ｧ縺ｯ蜑埼ｲ騾溷ｺｦ縺ｯ繝ｭ繝ｼ繧ｫ繝ｫ縺ｮX霆ｸ謌仙・繧剃ｽｿ縺・∋縺阪□縺後‘go_vel縺ｯ繝ｯ繝ｼ繝ｫ繝牙ｺｧ讓吶・蝣ｴ蜷医′縺ゅｋ縺溘ａ騾溷ｺｦ繝弱Ν繝繧剃ｽｿ逕ｨ
+            # CARLA縺ｧ縺ｯ蜑埼€ｲ騾溷ｺｦ縺ｯ繝ｭ繝ｼ繧ｫ繝ｫ縺ｮX霆ｸ謌仙・繧剃ｽｿ縺・∋縺阪□縺後€‘go_vel縺ｯ繝ｯ繝ｼ繝ｫ繝牙ｺｧ讓吶・蝣ｴ蜷医′縺ゅｋ縺溘ａ騾溷ｺｦ繝弱Ν繝繧剃ｽｿ逕ｨ
             current_speed = np.linalg.norm(ego_vel) 
             error_v = target_v - current_speed
             accel_cmd = self.kp_long * error_v + self.kd_long * (error_v - self.prev_error_long) / dt
@@ -852,7 +866,8 @@ class CameraOnlyExperiment:
             ego_loc_carla = self.ego_vehicle.get_location()
             waypoint = carla_map.get_waypoint(ego_loc_carla, project_to_road=True, lane_type=carla.LaneType.Driving)
             
-            # 2.0m蜑肴婿縺ｮ繧ｦ繧ｧ繧､繝昴う繝ｳ繝医ｒ蜿門ｾ・            waypoints_ahead = waypoint.next(2.0)
+            # 2.0m蜑肴婿縺ｮ繧ｦ繧ｧ繧､繝昴う繝ｳ繝医ｒ蜿門ｾ・
+            waypoints_ahead = waypoint.next(2.0)
             target_wp = waypoints_ahead[0] if waypoints_ahead else waypoint
             
             target_loc = target_wp.transform.location
@@ -897,14 +912,16 @@ class CameraOnlyExperiment:
             control.steer = float(steer_cmd)
             self.ego_vehicle.apply_control(control)
 
-        # 4. 遨ｺ髢薙そ繝ｳ繧ｵ繝ｼ繝輔Η繝ｼ繧ｸ繝ｧ繝ｳ縺ｨ繝ｪ繧ｹ繧ｯ縺ｮ險育ｮ・        measured_class = 'unknown'
+        # 4. 遨ｺ髢薙そ繝ｳ繧ｵ繝ｼ繝輔Η繝ｼ繧ｸ繝ｧ繝ｳ縺ｨ繝ｪ繧ｹ繧ｯ縺ｮ險育ｮ・
+        measured_class = 'unknown'
         fused_dist = float('inf')
         global_dist_lidar = float('inf')
         global_dist_camera = float('inf')
         global_dist_stereo = float('inf')
         global_dist_ai = float('inf')
         
-        # YOLO縺ｮ蜷・ヰ繧ｦ繝ｳ繝・ぅ繝ｳ繧ｰ繝懊ャ繧ｯ繧ｹ蜀・〒縲´iDAR縺ｨStereo縺ｮ遨ｺ髢薙ヵ繝･繝ｼ繧ｸ繝ｧ繝ｳ繧貞ｮ溯｡・        for det in yolo_detections:
+        # YOLO縺ｮ蜷・ヰ繧ｦ繝ｳ繝・ぅ繝ｳ繧ｰ繝懊ャ繧ｯ繧ｹ蜀・〒縲´iDAR縺ｨStereo縺ｮ遨ｺ髢薙ヵ繝･繝ｼ繧ｸ繝ｧ繝ｳ繧貞ｮ溯｡・
+        for det in yolo_detections:
             stereo_d = det.get('z_distance', float('inf'))
             actual_stereo = det.get('dist_stereo', float('inf'))
             actual_ai = det.get('dist_ai', float('inf'))
@@ -958,11 +975,13 @@ class CameraOnlyExperiment:
             lateral_offset=measured_lateral if 'measured_lateral' in locals() else 0.0
         )
         
-        # 蠕梧婿莠呈鋤諤ｧ縺ｮ縺溘ａ縲∽ｻ･蜑阪・calculate_multi_risk繧ゆｸｦ陦後＠縺ｦ蜻ｼ縺ｳ蜃ｺ縺・        r_perceived, r_gt, gap_multi, multi_info = self.risk_calculator.calculate_multi_risk(
+        # 蠕梧婿莠呈鋤諤ｧ縺ｮ縺溘ａ縲∽ｻ･蜑阪・calculate_multi_risk繧ゆｸｦ陦後＠縺ｦ蜻ｼ縺ｳ蜃ｺ縺・
+        r_perceived, r_gt, gap_multi, multi_info = self.risk_calculator.calculate_multi_risk(
             ego_pos, ego_vel, gt_obstacles, yolo_detections
         )
         
-        # Optuna譛驕ｩ蛹悶・逶ｮ逧・未謨ｰ縺ｨ縺励※縺ｮ Gap 縺ｯ莉･蜑阪・繧ゅ・繧偵◎縺ｮ縺ｾ縺ｾ蠑輔″邯吶＄・郁ｧ｣譫蝉ｺ呈鋤諤ｧ・・        gap = gap_multi
+        # Optuna譛€驕ｩ蛹悶・逶ｮ逧・未謨ｰ縺ｨ縺励※縺ｮ Gap 縺ｯ莉･蜑阪・繧ゅ・繧偵◎縺ｮ縺ｾ縺ｾ蠑輔″邯吶＄・郁ｧ｣譫蝉ｺ呈鋤諤ｧ・・
+        gap = gap_multi
 
         
         if not hasattr(self, 'max_gap_this_run'):
@@ -981,7 +1000,8 @@ class CameraOnlyExperiment:
         if self.record_video and image is not None:
             self.video_frames.append(image.copy())
         
-        # GT霍晞屬縺ｮ險育ｮ・        dist_gt = -1.0
+        # GT霍晞屬縺ｮ險育ｮ・
+        dist_gt = -1.0
 
         if not self.demo_mode and hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None and self.target_actor is not None and self.target_actor.is_alive:
             dist_gt = self.ego_vehicle.get_transform().location.distance(self.target_actor.get_transform().location)
@@ -1377,6 +1397,12 @@ class CameraOnlyExperiment:
             self._destroy_actors()
             self.world.apply_settings(self.original_settings)
             print("[INFO] CARLA synchronous mode disabled.")
+
+    def get_max_gap(self):
+        return getattr(self, 'max_gap_this_run', 0.0)
+        
+    def get_worst_case_image(self):
+        return getattr(self, 'worst_case_image', None)
 
     def export_training_data(self, filepath="results/distance_training_data.csv"):
 

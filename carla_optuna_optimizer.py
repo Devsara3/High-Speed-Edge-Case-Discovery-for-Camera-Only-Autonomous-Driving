@@ -76,7 +76,6 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
                 print(f"    Params: Sun Alt={sun_altitude_angle:.2f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
                 
         finally:
-            experiment.export_log_data()
             experiment.shutdown()
             
         elapsed_time = time.time() - start_time
@@ -141,6 +140,7 @@ if __name__ == "__main__":
                         help="Scenario skeleton: A (CPNA), B (CCRb), C (CCFtap), D (AVOID), E (RLI), sequence (all dynamically)")
     parser.add_argument("--mode", type=str, default="exploit", choices=["exploit", "explore"], help="Mode: exploit (find worst edge cases) or explore (collect random diverse data)")
     parser.add_argument("--demo", action="store_true", help="Run in mock/demo mode without CARLA server")
+    parser.add_argument("--video", action="store_true", help="Record video")
     args = parser.parse_args()
     
     run_optuna_search(n_trials=args.trials, sampler_name=args.sampler, scenario_name=args.scenario, demo_mode=args.demo, mode=args.mode, record_video=args.video)
