@@ -274,13 +274,13 @@ class CameraOnlyExperiment:
         # 繧ｳ繝ｼ繝ｫ繝舌ャ繧ｯ縺ｧ(繝輔Ξ繝ｼ繝ID, 逕ｻ蜒・繧呈ｼ邏・        def _on_camera_capture_left(image):
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
-            bgr_image = array[:, :, :3]
+            bgr_image = np.ascontiguousarray(array[:, :, :3])
             self.image_queue_left.put((image.frame, bgr_image))
             
         def _on_camera_capture_right(image):
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
-            bgr_image = array[:, :, :3]
+            bgr_image = np.ascontiguousarray(array[:, :, :3])
             self.image_queue_right.put((image.frame, bgr_image))
             
         self.camera_left.listen(_on_camera_capture_left)
