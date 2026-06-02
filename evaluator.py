@@ -22,7 +22,17 @@ class YoloEvaluator:
         """
         モデルの初期化。初回はインターネットからダウンロードされます。
         """
-        self.model = YOLO(model_name)
+        if not os.path.exists(model_name):
+            fallback = os.path.join(os.path.dirname(__file__), '..', 'yolov8n.pt')
+            if not os.path.exists(fallback):
+                fallback = 'yolov8n.pt'
+            print(f"[WARNING] {model_name} not found locally, falling back to {fallback}")
+            model_name = fallback
+        try:
+            self.model = YOLO(model_name)
+        except Exception:
+            print("[WARNING] Failed to load model, falling back to yolov8n.pt")
+            self.model = YOLO('yolov8n.pt')
         # 車や歩行者など、注目するクラスID (COCO dataset: 0:person, 1:bicycle, 2:car, 3:motorcycle, 5:bus, 7:truck, 9:traffic light, 11:stop sign)
         self.target_classes = [0, 1, 2, 3, 5, 7, 9, 11]
         
@@ -41,8 +51,6 @@ class YoloEvaluator:
 
         # 深層学習深度推定モデル (MiDaS) のロード試行 (実用的な単眼3D検出システムとして機能させます)
         try:
-            import sys
-            import os
             # 親ディレクトリの同階層にある carla_edge_case_search を sys.path に追加して week3 を読み込めるようにする
             current_dir = os.path.dirname(os.path.abspath(__file__))
             parent_dir = os.path.dirname(current_dir)
