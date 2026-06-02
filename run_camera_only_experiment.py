@@ -60,10 +60,12 @@ class CameraOnlyExperiment:
         # PID繧ｳ繝ｳ繝医Ο繝ｼ繝ｩ逕ｨ繝代Λ繝｡繝ｼ繧ｿ・育ｸｦ譁ｹ蜷托ｼ・        self.kp_long = 0.8
         self.kd_long = 0.15
         self.prev_error_long = 0.0
+
         
         if self.demo_mode:
             print("[INFO] Running in MOCK DEMO mode (No CARLA server required).")
             base_img = "base_image.png"
+
             if not os.path.exists(base_img):
                 # 繝繝溘・逕ｻ蜒上ｒ菴懈・
                 dummy_img = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -83,7 +85,9 @@ class CameraOnlyExperiment:
             self.target_actor = None
             self.image_queue = queue.Queue()
             
-            # 蜷梧悄繝｢繝ｼ繝芽ｨｭ螳・            self.original_settings = self.world.get_settings()
+            # 蜷梧悄繝｢繝ｼ繝芽ｨｭ螳・            self.traffic_manager = self.client.get_trafficmanager()
+            self.traffic_manager.set_synchronous_mode(True)
+            self.original_settings = self.world.get_settings()
             self.settings = self.world.get_settings()
             self.settings.synchronous_mode = True
             self.settings.fixed_delta_seconds = 0.05
@@ -107,7 +111,9 @@ class CameraOnlyExperiment:
         self.mock_env.ego_pos = [0.0, 0.0, 0.0]
         self.mock_env.ego_vel = [v_ego, 0.0, 0.0]
         
-        # 繧ｿ繝ｼ繧ｲ繝・ヨ繧｢繧ｯ繧ｿ繝ｼ縺ｮ繧ｪ繝ｼ繝舌・繝ｩ繧､繝・        if name == 'A':
+        # ターゲットアクター
+
+        if name == 'A':
             # 繧ｷ繝翫Μ繧ｪA (CPNA: 豁ｩ陦瑚・ｨｪ譁ｭ)
             v_ped = 1.39 # 5 km/h
             dist_cross = 30.0 # 讓ｪ譁ｭ菴咲ｽｮ X=30m
@@ -192,25 +198,30 @@ class CameraOnlyExperiment:
         ego_transform = spawn_points[0]
         target_tl = None
         
-        # Scenario E 縺ｮ蝣ｴ蜷医∽ｺ句燕縺ｫ菫｡蜿ｷ讖溘′縺ゅｋ莠､蟾ｮ轤ｹ縺ｮ謇句燕縺ｮ繧ｹ繝昴・繝ｳ繝昴う繝ｳ繝医ｒ謗｢縺・        if name == 'E':
+        # Scenario E 縺ｮ蝣ｴ蜷医∽ｺ句燕縺ｫ菫｡蜿ｷ讖溘′縺ゅｋ莠､蟾ｮ轤ｹ縺ｮ謇句燕縺ｮ繧ｹ繝昴・繝ｳ繝昴う繝ｳ繝医ｒ謗｢縺・
+        if name == 'E':
             best_spawn = spawn_points[0]
             for sp in spawn_points:
                 wp = self.world.get_map().get_waypoint(sp.location)
                 found = False
                 for _ in range(20): # 譛螟ｧ40m蜑肴婿繧呈爾邏｢
                     next_wps = wp.next(2.0)
+
                     if not next_wps:
                         break
                     wp = next_wps[0]
                     # 蜑肴婿縺ｮwaypoint蜻ｨ霎ｺ(15m莉･蜀・縺ｫ菫｡蜿ｷ讖溘′縺ゅｋ縺九メ繧ｧ繝・け
                     for tl in self.world.get_actors().filter('traffic.traffic_light'):
+
                         if tl.get_location().distance(wp.transform.location) < 15.0:
                             best_spawn = sp
                             target_tl = tl
                             found = True
                             break
+
                     if found:
                         break
+
                 if found:
                     break
             ego_transform = best_spawn
@@ -247,6 +258,7 @@ class CameraOnlyExperiment:
         
         # 繧ｭ繝･繝ｼ縺ｮ菴懈・縺ｨ繧ｯ繝ｪ繧｢
         import queue
+
         if not hasattr(self, 'image_queue_left'):
             self.image_queue_left = queue.Queue()
             self.image_queue_right = queue.Queue()
@@ -302,6 +314,7 @@ class CameraOnlyExperiment:
         seg_bp.set_attribute('fov', '110')
         self.seg_cam = self.world.spawn_actor(seg_bp, camera_transform_left, attach_to=self.ego_vehicle)
         self.actors.append(self.seg_cam)
+
         
         if not hasattr(self, 'lidar_queue'):
             self.lidar_queue = queue.Queue()
@@ -333,6 +346,7 @@ class CameraOnlyExperiment:
         v_ego = ego_speed_kph / 3.6
         fwd = ego_transform.get_forward_vector()
         right = ego_transform.get_right_vector()
+
         
         if name == 'A':
             ped_bp = self.blueprint_library.filter('walker.pedestrian.*')[0]
@@ -384,6 +398,7 @@ class CameraOnlyExperiment:
             self.actors.append(self.target_actor)
 
         elif name == 'E':
+
             if target_tl:
                 target_tl.set_state(carla.TrafficLightState.Red)
                 target_tl.freeze(True)
@@ -414,6 +429,7 @@ class CameraOnlyExperiment:
         self._update_spectator()
 
     def _update_spectator(self):
+
         if not hasattr(self, 'ego_vehicle') or self.ego_vehicle is None:
             return
         ego_tf = self.ego_vehicle.get_transform()
@@ -433,9 +449,14 @@ class CameraOnlyExperiment:
             if actor is not None and actor.is_alive:
                 actor.destroy()
         self.actors = []
+        if hasattr(self, 'target_actor') and self.target_actor is not None and getattr(self.target_actor, 'is_alive', False):
+            self.target_actor.destroy()
+        self.target_actor = None
+        if hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None and getattr(self.ego_vehicle, 'is_alive', False):
+            self.ego_vehicle.destroy()
         self.ego_vehicle = None
         self.camera = None
-        self.target_actor = None
+        print("[INFO] Cleaned up actors.")
 
 
     def set_weather_params(self, sun_alt, precip, fog):
@@ -444,6 +465,7 @@ class CameraOnlyExperiment:
             'precipitation': precip,
             'fog_density': fog
         }
+
         if self.demo_mode:
             self.mock_env.sun_altitude_angle = sun_alt
             self.mock_env.precipitation = precip
@@ -477,7 +499,8 @@ class CameraOnlyExperiment:
         measured_rel_vel = 0.0
         final_dist = None
         
-        # 1. 迚ｩ逅・憾諷九♀繧医・繧ｫ繝｡繝ｩ逕ｻ蜒擾ｼ・OLO3D・峨・蜿門ｾ・        if self.demo_mode:
+        # 1. 迚ｩ逅・憾諷九♀繧医・繧ｫ繝｡繝ｩ逕ｻ蜒擾ｼ・OLO3D・峨・蜿門ｾ・
+        if self.demo_mode:
             ego_pos = self.mock_env.ego_pos
             ego_vel = self.mock_env.ego_vel
             gt_data = self.mock_env.get_ground_truth()
@@ -485,19 +508,25 @@ class CameraOnlyExperiment:
             travel_dist = ego_pos[0] - self.scenario_start_x
             
             # 繧ｷ繝翫Μ繧ｪ蛻･繧｢繧ｯ繧ｿ繝ｼ遘ｻ蜍輔ヨ繝ｪ繧ｬ繝ｼ
+
             if scenario_name == 'A':
                 ped_actor = self.mock_env.obstacles[0]
+
                 if travel_dist >= self.trigger_dist:
                     ped_actor['active'] = True
+
                 if ped_actor.get('active', False):
                     ped_actor['pos'][1] += ped_actor['vel'][1] * dt
+
                     if ped_actor['pos'][1] < -3.0:
                         ped_actor['pos'][1] = -3.0
                         ped_actor['vel'][1] = 0.0
             elif scenario_name == 'B':
                 lead_actor = self.mock_env.obstacles[0]
+
                 if self.scenario_ticks >= self.lead_decel_ticks:
                     self.lead_decel_started = True
+
                 
                 if self.lead_decel_started:
                     lead_vel_x = lead_actor['vel'][0] + self.lead_deceleration * dt
@@ -527,6 +556,7 @@ class CameraOnlyExperiment:
                 obs_pos = np.array(obs['pos'], dtype=float)
                 rel_pos = obs_pos - np.array(ego_pos, dtype=float)
                 dist_gt = np.linalg.norm(rel_pos)
+
                 
                 if rel_pos[0] >= -2.0 and dist_gt <= 60.0:
                     visibility = 1.0 - (fog / 100.0) * 0.65 - (precip / 100.0) * 0.3
@@ -534,6 +564,7 @@ class CameraOnlyExperiment:
                     brightness = max(0.1, min(1.0, (sun_alt + 15.0) / 105.0))
                     
                     det_prob = 0.98 * visibility * (0.4 + 0.6 * brightness)
+
                     
                     if np.random.rand() > det_prob:
                         yolo_z = float('inf')
@@ -558,13 +589,16 @@ class CameraOnlyExperiment:
                         yolo_rel_pos = [yolo_x, yolo_y, yolo_z]
                         
                         detected_color = None
+
                         if obs_class == 'traffic_light':
                             detected_color = obs.get('color', self.mock_env.traffic_light_color)
+
                             if detected_color in ['red', 'yellow'] and np.random.rand() > visibility:
                                 detected_color = 'green'
                                 
                         # 蟷ｾ菴募ｭｦ逧・↓BBox繧ｵ繧､繧ｺ縺ｨ菴咲ｽｮ繧帝・ｮ暦ｼ医Δ繝・け逕ｨ繝・・繧ｿ蜿朱寔縺ｮ縺溘ａ・・                        real_w = 1.8
                         real_h = 1.5
+
                         if obs_class == 'pedestrian':
                             real_w = 0.5
                             real_h = 1.7
@@ -614,6 +648,7 @@ class CameraOnlyExperiment:
                     sensor_frame_seg, s_img = self.seg_queue.get(timeout=0.1)
                     
                     frames = [sensor_frame_l, sensor_frame_r, sensor_frame_lidar, sensor_frame_radar, sensor_frame_depth, sensor_frame_seg]
+
                     if all(f == self.next_frame_id for f in frames):
                         image_left = bgr_img_l
                         image_right = bgr_img_r
@@ -638,6 +673,7 @@ class CameraOnlyExperiment:
                         break
                 except queue.Empty:
                     break
+
             
             if image_left is None:
                 print(f"[WARNING] Mismatched or dropped sensor frame for tick {self.next_frame_id}. Perception will fall back.")
@@ -647,6 +683,7 @@ class CameraOnlyExperiment:
                 seg_img = np.zeros((720, 1280, 4), dtype=np.uint8)
             
             # --- HSC蜷域・ ---
+
             if hasattr(self, 'hsc_emulator') and depth_img is not None and seg_img is not None:
                 hsc_image = self.hsc_emulator.synthesize(image_left, depth_img, seg_img)
             else:
@@ -658,16 +695,20 @@ class CameraOnlyExperiment:
             ego_vel_vec = self.ego_vehicle.get_velocity()
             ego_vel = [ego_vel_vec.x, ego_vel_vec.y, ego_vel_vec.z]
             travel_dist = ego_transform.location.distance(self.scenario_start_loc)
+
             
             if scenario_name == 'A':
+
                 if travel_dist >= self.trigger_dist:
                     ped_control = carla.WalkerControl()
                     ped_control.direction = ego_transform.get_right_vector()
                     ped_control.speed = 1.39
                     self.target_actor.apply_control(ped_control)
             elif scenario_name == 'B':
+
                 if self.scenario_ticks >= self.lead_decel_ticks:
                     self.lead_decel_started = True
+
                 
                 if self.lead_decel_started:
                     v_lead = self.target_actor.get_velocity()
@@ -675,12 +716,14 @@ class CameraOnlyExperiment:
                     self.target_actor.set_target_velocity(carla.Vector3D(new_vx, v_lead.y, v_lead.z))
                     
             elif scenario_name == 'C':
+
                 if self.target_actor is not None and self.target_actor.is_alive:
                     ego_tf = self.ego_vehicle.get_transform()
                     target_tf = self.target_actor.get_transform()
                     dist_to_target = ego_tf.location.distance(target_tf.location)
                     
-                    # 霍晞屬縺瑚ｿ代▼縺・◆繧峨∬・辟ｶ縺ｪ迚ｩ逅・嫌蜍・VehicleControl)縺ｧ蠑ｷ蠑輔↓繝上Φ繝峨Ν繧貞・繧・                    if dist_to_target < 20.0:
+                    # 霍晞屬縺瑚ｿ代▼縺・◆繧峨∬・辟ｶ縺ｪ迚ｩ逅・嫌蜍・VehicleControl)縺ｧ蠑ｷ蠑輔↓繝上Φ繝峨Ν繧貞・繧・
+                    if dist_to_target < 20.0:
                         # steer蛟､繧帝←逕ｨ縺励※閾ｪ霆顔ｷ壼・(蟇ｾ蜷題ｻ翫°繧芽ｦ九※蟾ｦ譁ｹ蜷・縺ｫ蜑ｲ繧願ｾｼ繧
                         control = carla.VehicleControl(throttle=0.8, steer=-0.6)
                         self.target_actor.apply_control(control)
@@ -696,22 +739,27 @@ class CameraOnlyExperiment:
             
             # --- LiDAR Projection & Radar Extraction ---
             projected_lidar = []
+
             if not self.demo_mode and lidar_data is not None:
                 lidar_points = np.frombuffer(lidar_data.raw_data, dtype=np.float32).reshape((-1, 4))
                 # 3D遨ｺ髢薙・LiDAR轤ｹ鄒､繧偵き繝｡繝ｩ縺ｮ2D逕ｻ蜒丞ｹｳ髱｢縺ｫ謚募ｽｱ (f=448.1, cx=640, cy=360)
                 for pt in lidar_points:
                     x, y, z, _ = pt
+
                     if x > 0.5: # 蜑肴婿縺ｮ縺ｿ
                         u = int((y * 448.1) / x + 640)
                         v = int((-z * 448.1) / x + 360)
+
                         if 0 <= u < 1280 and 0 <= v < 720:
                             projected_lidar.append((u, v, x))
                             # 謠冗判逕ｨ (蟆上＆縺冗ｷ代〒謇薙▽)
                             cv2.circle(image, (u, v), 1, (0, 255, 0), -1)
 
+
             if radar_data is not None:
                 radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32).reshape((-1, 4))
                 front_radar = radar_points[np.abs(radar_points[:, 1]) < 0.1]
+
                 if len(front_radar) > 0:
                     closest_idx = np.argmin(front_radar[:, 3])
                     measured_rel_vel = front_radar[closest_idx, 0]
@@ -719,6 +767,7 @@ class CameraOnlyExperiment:
                     
             v_ego_norm = np.linalg.norm(ego_vel)
             measured_target_vel = max(0.0, v_ego_norm - measured_rel_vel) if len(front_radar if radar_data is not None else []) > 0 else 0.0
+
             
             if self.target_actor is not None and self.target_actor.is_alive:
                 t_trans = self.target_actor.get_transform()
@@ -726,6 +775,7 @@ class CameraOnlyExperiment:
                 
                 act_class = 'unknown'
                 mu_val = 1.0
+
                 if scenario_name == 'A':
                     act_class = 'pedestrian'
                     mu_val = 1.8
@@ -752,15 +802,18 @@ class CameraOnlyExperiment:
         offset_y = 0.0
         
         for det in yolo_detections:
+
             if det['yolo3d_rel_pos'] is not None:
                 x_rel, y_rel, z_rel = det['yolo3d_rel_pos']
                 
-                # AVOID (蟾･莠狗畑繝舌Μ繧ｱ繝ｼ繝牙屓驕ｿ) 蛻､螳・                if det['class'] == 'construction_signal' and z_rel <= 18.0:
+                # AVOID (蟾･莠狗畑繝舌Μ繧ｱ繝ｼ繝牙屓驕ｿ) 蛻､螳・
+                if det['class'] == 'construction_signal' and z_rel <= 18.0:
                     offset_y = 2.5
                 
                 # AEB 繝悶Ξ繝ｼ繧ｭ蛻､螳・ 閾ｪ霆願ｵｰ陦後Ξ繝ｼ繝ｳ蜀・(|x_rel| < 1.8m) 縺ｮ蜑肴婿髫懷ｮｳ迚ｩ
                 is_lane_hazard = abs(x_rel) < 1.8
                 # 菫｡蜿ｷ讖滂ｼ郁ｵ､繝ｻ鮟・ｼ峨・蛛懈ｭ｢蛻､螳夲ｼ・騾ｲ陦梧婿蜷・Z)縺ｫ縺ゅｌ縺ｰ豁｢縺ｾ繧・                is_red_light = det['class'] == 'traffic_light' and det.get('traffic_light_color') in ['red', 'yellow']
+
                 
                 if (is_lane_hazard or is_red_light) and z_rel < min_hazard_dist:
                     min_hazard_dist = z_rel
@@ -770,8 +823,10 @@ class CameraOnlyExperiment:
         target_v = target_speed_kph / 3.6
         
         # 繝・・繧ｿ蜿朱寔逕ｨ縺ｪ縺ｩ縲、I縺梧悴蟄ｦ鄙偵〒繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ縺瑚ｪ､菴懷虚縺吶ｋ蝣ｴ蜷医・繝悶Ξ繝ｼ繧ｭ繧堤┌隕悶☆繧・譛菴朱剞縺ｮ螳牙・陬・ｽｮ縺ｮ縺ｿ)
-        # 霍晞屬謗ｨ螳哂I(Regressor)縺後Ο繝ｼ繝峨＆繧後※縺・↑縺・ｴ蜷医・縲∝ｼｷ蛻ｶ逧・↓PID霑ｽ蠕薙ｒ蜆ｪ蜈・        if getattr(self.evaluator, 'distance_regressor', None) is None:
+        # 霍晞屬謗ｨ螳哂I(Regressor)縺後Ο繝ｼ繝峨＆繧後※縺・↑縺・ｴ蜷医・縲∝ｼｷ蛻ｶ逧・↓PID霑ｽ蠕薙ｒ蜆ｪ蜈・
+        if getattr(self.evaluator, 'distance_regressor', None) is None:
             min_hazard_dist = float('inf')  # AEB繧堤┌蜉ｹ蛹悶＠縺ｦ襍ｰ繧雁・繧峨○繧・
+
         if min_hazard_dist < 10.0:
             accel_cmd = -1.0  # 繝輔Ν繝悶Ξ繝ｼ繧ｭ
             print(f"[AEB ACTIVE] Hazard detected! Estimated Distance: {min_hazard_dist:.2f}m. Full Braking.")
@@ -786,6 +841,7 @@ class CameraOnlyExperiment:
             accel_cmd = np.clip(accel_cmd, -1.0, 1.0)
             
         # 2-B. Lateral PID 蝗樣∩謫崎扱蛻ｶ蠕｡ (逶ｮ讓吶Λ繧､繝ｳ霑ｽ蠕・
+
         if self.demo_mode:
             error_y = offset_y - ego_pos[1]
         else:
@@ -798,6 +854,7 @@ class CameraOnlyExperiment:
             target_wp = waypoints_ahead[0] if waypoints_ahead else waypoint
             
             target_loc = target_wp.transform.location
+
             if offset_y != 0.0:
                 right_vec = target_wp.transform.get_right_vector()
                 target_loc += right_vec * offset_y
@@ -823,10 +880,12 @@ class CameraOnlyExperiment:
         steer_cmd = np.clip(steer_cmd, -1.0, 1.0)
         
         # 3. 迚ｩ逅・腸蠅・∈蛻ｶ蠕｡謖・ｻ､蛟､繧帝←逕ｨ
+
         if self.demo_mode:
             self.mock_env.step([accel_cmd, steer_cmd])
         else:
             control = carla.VehicleControl()
+
             if accel_cmd >= 0:
                 control.throttle = float(accel_cmd)
                 control.brake = 0.0
@@ -840,21 +899,29 @@ class CameraOnlyExperiment:
         fused_dist = float('inf')
         global_dist_lidar = float('inf')
         global_dist_camera = float('inf')
+        global_dist_stereo = float('inf')
+        global_dist_ai = float('inf')
         
         # YOLO縺ｮ蜷・ヰ繧ｦ繝ｳ繝・ぅ繝ｳ繧ｰ繝懊ャ繧ｯ繧ｹ蜀・〒縲´iDAR縺ｨStereo縺ｮ遨ｺ髢薙ヵ繝･繝ｼ繧ｸ繝ｧ繝ｳ繧貞ｮ溯｡・        for det in yolo_detections:
             stereo_d = det.get('z_distance', float('inf'))
+            actual_stereo = det.get('dist_stereo', float('inf'))
+            actual_ai = det.get('dist_ai', float('inf'))
             lidar_d = float('inf')
+
             
             if 'bbox' in det:
                 x1, y1, x2, y2 = det['bbox']
                 # 譫蜀・・LiDAR轤ｹ繧呈歓蜃ｺ
                 lidar_in_box = [pt[2] for pt in projected_lidar if x1 <= pt[0] <= x2 and y1 <= pt[1] <= y2]
+
                 if len(lidar_in_box) > 0:
                     lidar_d = np.median(lidar_in_box)
                 
                 # 繧ｹ繝槭・繝医・繝輔Η繝ｼ繧ｸ繝ｧ繝ｳ
+
                 if not np.isinf(lidar_d) and not np.isinf(stereo_d):
-                    # LiDAR縺ｨStereo縺ｮ蟾ｮ縺悟ｰ上＆縺代ｌ縺ｰ・医∪縺溘・繧ｫ繝｡繝ｩ縺碁□縺吶℃縺ｦLiDAR縺瑚ｿ代＞蝣ｴ蜷医・髮ｨ邊偵・蜿ｯ閭ｽ諤ｧ縺ゅｊ・・                    if abs(lidar_d - stereo_d) < 5.0 or (lidar_d > 3.0):
+                    # LiDAR縺ｨStereo縺ｮ蟾ｮ縺悟ｰ上＆縺代ｌ縺ｰ・医∪縺溘・繧ｫ繝｡繝ｩ縺碁□縺吶℃縺ｦLiDAR縺瑚ｿ代＞蝣ｴ蜷医・髮ｨ邊偵・蜿ｯ閭ｽ諤ｧ縺ゅｊ・・
+                    if abs(lidar_d - stereo_d) < 5.0 or (lidar_d > 3.0):
                         final_d = lidar_d # 鬮倡ｲｾ蠎ｦ縺ｪLiDAR繧剃ｿ｡逕ｨ
                     else:
                         final_d = stereo_d # LiDAR縺ｮ霑第磁繝弱う繧ｺ(繧ｴ繝ｼ繧ｹ繝・縺ｨ縺励※譽・唆縺励ヾtereo繧剃ｿ｡逕ｨ
@@ -870,12 +937,15 @@ class CameraOnlyExperiment:
                 cv2.rectangle(image, (x1, y1), (x2, y2), (255, 0, 0), 2)
                 text = f"{det['class']} Fused:{final_d:.1f}m (L:{lidar_d:.1f}/C:{stereo_d:.1f})"
                 cv2.putText(image, text, (x1, max(y1 - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
                 
                 if final_d < fused_dist:
                     fused_dist = final_d
                     measured_class = det['class']
                     global_dist_lidar = lidar_d
                     global_dist_camera = stereo_d
+                    global_dist_stereo = actual_stereo
+                    global_dist_ai = actual_ai
                     
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
@@ -891,19 +961,23 @@ class CameraOnlyExperiment:
         )
         
         # Optuna譛驕ｩ蛹悶・逶ｮ逧・未謨ｰ縺ｨ縺励※縺ｮ Gap 縺ｯ莉･蜑阪・繧ゅ・繧偵◎縺ｮ縺ｾ縺ｾ蠑輔″邯吶＄・郁ｧ｣譫蝉ｺ呈鋤諤ｧ・・        gap = gap_multi
+
         
         if not hasattr(self, 'max_gap_this_run'):
             self.max_gap_this_run = -float('inf')
             self.worst_case_image = None
             self.worst_case_step = 0
+
             
         if gap > self.max_gap_this_run:
             self.max_gap_this_run = gap
+
             if image is not None:
                 self.worst_case_image = image.copy()
             self.worst_case_step = self.time_step
         
         # GT霍晞屬縺ｮ險育ｮ・        dist_gt = -1.0
+
         if not self.demo_mode and hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None and self.target_actor is not None and self.target_actor.is_alive:
             dist_gt = self.ego_vehicle.get_transform().location.distance(self.target_actor.get_transform().location)
         elif self.demo_mode and len(self.mock_env.obstacles) > 0:
@@ -913,6 +987,10 @@ class CameraOnlyExperiment:
         log_entry = {
             'step': self.time_step,
             'scenario_ticks': self.scenario_ticks,
+            'tick': self.scenario_ticks,
+            'precipitation': getattr(self, 'current_weather', {}).get('precipitation', 0.0),
+            'fog': getattr(self, 'current_weather', {}).get('fog_density', 0.0),
+            'scenario_type': getattr(self, 'current_scenario', 'unknown'),
             'ego_x': ego_pos[0],
             'ego_y': ego_pos[1],
             'ego_vx': ego_vel[0],
@@ -920,6 +998,8 @@ class CameraOnlyExperiment:
             'fusion_distance': dist_for_risk,
             'dist_lidar': global_dist_lidar,
             'dist_camera': global_dist_camera,
+            'dist_stereo': global_dist_stereo,
+            'dist_ai': global_dist_ai,
             'dist_gt': dist_gt,
             'r_fusion': r_fusion,
             'r_perceived': r_perceived,
@@ -940,18 +1020,24 @@ class CameraOnlyExperiment:
             'accel': accel_cmd
         }
         
-        # 5.5. 譛蟆乗磁霑題ｷ晞屬縺ｮ繝医Λ繝・く繝ｳ繧ｰ縺ｨ陦晉ｪ∝愛螳・        if len(gt_obstacles) > 0:
+        # 5.5. 譛蟆乗磁霑題ｷ晞屬縺ｮ繝医Λ繝・く繝ｳ繧ｰ縺ｨ陦晉ｪ∝愛螳・
+        if len(gt_obstacles) > 0:
             current_min_dist = float('inf')
             for gt in gt_obstacles:
+
                 if gt['class'] != 'unknown':
                     dist = np.linalg.norm(np.array(gt['pos'], dtype=float) - np.array(ego_pos, dtype=float))
+
                     if dist < current_min_dist:
                         current_min_dist = dist
+
                         
             if current_min_dist < self.scenario_min_distance:
                 self.scenario_min_distance = current_min_dist
+
                 
             if current_min_dist < 1.0:
+
                 if getattr(self, '_collision_registered_this_scenario', False) == False:
                     self.scenario_collisions += 1
                     self._collision_registered_this_scenario = True
@@ -961,30 +1047,37 @@ class CameraOnlyExperiment:
         # HUD縺ｮ繝・く繧ｹ繝域緒逕ｻ縺ｨ蜍慕判菫晏ｭ・        cv2.putText(image, f"Risk: {r_fusion:.2f} | Gap: {gap:.2f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255) if r_fusion > 1.0 else (0, 255, 0), 2)
         cv2.putText(image, f"Action: {'Brake' if accel_cmd < 0 else 'Cruise'} | Steer: {steer_cmd:.2f}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
         cv2.putText(image, f"Dist (L/C/F): {global_dist_lidar:.1f} / {global_dist_camera:.1f} / {fused_dist:.1f}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
         
         if hasattr(self, 'video_writer'):
             self.video_writer.write(image)
         
         self.log_data.append(log_entry)
         
-        # 6. 蟄ｦ鄙偵ョ繝ｼ繧ｿ縺ｮ閾ｪ蜍募庶髮・        if hasattr(self, 'training_data') and len(gt_obstacles) > 0:
+        # 6. 蟄ｦ鄙偵ョ繝ｼ繧ｿ縺ｮ閾ｪ蜍募庶髮・
+        if hasattr(self, 'training_data') and len(gt_obstacles) > 0:
             for det in yolo_detections:
                 det_class = det['class']
+
                 if det_class in ['car', 'pedestrian', 'construction_signal', 'traffic_light']:
                     best_gt = None
                     min_dist_diff = float('inf')
                     for gt in gt_obstacles:
+
                         if gt['class'] == det_class:
                             d_gt = np.linalg.norm(np.array(gt['pos'], dtype=float) - np.array(ego_pos, dtype=float))
                             diff = abs(det['z_distance'] - d_gt)
+
                             if diff < min_dist_diff and diff < 10.0:
                                 min_dist_diff = diff
                                 best_gt = d_gt
+
                                 
                     if best_gt is not None:
                         y_bot = det.get('bbox_y_bottom', 0.0)
                         h_norm = det.get('bbox_height', 0.0)
                         w_norm = det.get('bbox_width', 0.0)
+
                         
                         if y_bot > 0.0 and h_norm > 0.0 and w_norm > 0.0:
                             is_ped = 1 if det_class == 'pedestrian' else 0
@@ -1004,36 +1097,45 @@ class CameraOnlyExperiment:
                                 'z_gt': best_gt
                             })
         
-        # 7. 繧ｷ繝翫Μ繧ｪ螳御ｺ・け繝ｪ繧｢蛻､螳・        if scenario_name == 'A':
+        # 7. 繧ｷ繝翫Μ繧ｪ螳御ｺ・け繝ｪ繧｢蛻､螳・
+        if scenario_name == 'A':
+
             if len(gt_obstacles) > 0:
                 p_pos = gt_obstacles[0]['pos']
+
                 if p_pos[1] <= -2.5 or travel_dist >= 32.0:
                     self.clear_flag = True
             else:
                 self.clear_flag = True
                 
         elif scenario_name == 'B':
+
             if self.scenario_ticks > 80 and ego_vel[0] < 0.1:
                 self.clear_flag = True
             elif self.scenario_ticks > 180:
                 self.clear_flag = True
                 
         elif scenario_name == 'C':
+
             if travel_dist >= 25.0:
                 self.clear_flag = True
                 
         elif scenario_name == 'D':
+
             if travel_dist >= 38.0:
                 self.clear_flag = True
                 
         elif scenario_name == 'E':
+
             if travel_dist >= 38.0:
                 self.clear_flag = True
+
 
         if not self.demo_mode:
             self.next_frame_id = self.world.tick()
         
-        # 豈・0蟶ｧ譖ｴ譁ｰ荳谺｡譌∬ｧり・ｧ・ｧ・        if not self.demo_mode and self.time_step % 10 == 0:
+        # 豈・0蟶ｧ譖ｴ譁ｰ荳谺｡譌∬ｧり・ｧ・ｧ・
+        if not self.demo_mode and self.time_step % 10 == 0:
             self._update_spectator()
 
         return log_entry
@@ -1053,6 +1155,7 @@ class CameraOnlyExperiment:
     def get_worst_case_parameters(self):
         step = getattr(self, 'worst_case_step', 0)
         for entry in self.log_data:
+
             if entry['step'] == step:
                 return {
                     'mu_perceived': entry.get('mu_perceived', 1.0),
@@ -1071,6 +1174,7 @@ class CameraOnlyExperiment:
         """
         謖・ｮ壹＆繧後◆蜊倅ｸ繧ｷ繝翫Μ繧ｪ繧貞ｮ溯｡後・        """
         print(f"\n===== Starting Scenario {scenario_name} =====")
+
         if self.demo_mode:
             self._setup_mock_scenario(scenario_name, target_speed_kph, gap, deceleration)
         else:
@@ -1078,9 +1182,11 @@ class CameraOnlyExperiment:
             
         for tick in range(max_ticks):
             log = self.run_step(scenario_name, target_speed_kph)
+
             
             if tick % 10 == 0:
                 print(f"Step {log['scenario_ticks']}: Ego X={log['ego_x']:.1f}m, Y={log['ego_y']:.2f}m, Vx={log['ego_vx']*3.6:.1f}km/h | worst={log['worst_obstacle']} | Gap={log['perception_gap']:.2f} (GT={log['r_gt']:.2f}, Perc={log['r_perceived']:.2f}) | mu_perc={log['mu_perceived']:.1f}, mu_gt={log['mu_gt']:.1f}")
+
                 
             if self.clear_flag:
                 print(f"--> Scenario {scenario_name} CLEARED at Step {tick}!")
@@ -1088,13 +1194,11 @@ class CameraOnlyExperiment:
 
         self._save_worst_image(scenario_name)
 
+
         if not self.demo_mode:
             self._destroy_actors()
 
-    def _inject_dynamic_hazard(self, seq):
-        """
-        現在走っているエゴ車両の前方に動的にハザードを出現させる。
-        """
+    def _inject_dynamic_hazard(self, seq, spawn_dist):
         if self.demo_mode:
             return
             
@@ -1106,124 +1210,147 @@ class CameraOnlyExperiment:
         ego_transform = self.ego_vehicle.get_transform()
         forward = ego_transform.get_forward_vector()
         right = ego_transform.get_right_vector()
-        
+        ego_loc = ego_transform.location
+
         if seq == 'A':
-            bp = self.blueprint_library.filter('walker.*')[0]
-            loc = ego_transform.location + forward * 15.0 - right * 3.5
+            bp_list = self.blueprint_library.filter('walker.pedestrian.0001')
+            bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('walker.*')[0]
+            loc = ego_loc + forward * spawn_dist - right * 3.5
             loc.z += 0.5
             rot = carla.Rotation(yaw=ego_transform.rotation.yaw + 90.0)
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+
             if self.target_actor:
                 self.actors.append(self.target_actor)
                 control = carla.WalkerControl()
                 control.direction = right
-                control.speed = 4.0
+                control.speed = 4.5
                 self.target_actor.apply_control(control)
                 
         elif seq == 'B':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = ego_transform.location + forward * 12.0
+            loc = ego_loc + forward * spawn_dist
             loc.z += 0.5
             rot = ego_transform.rotation
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+
             if self.target_actor:
                 self.actors.append(self.target_actor)
                 self.target_actor.set_target_velocity(self.ego_vehicle.get_velocity())
                 
         elif seq == 'C':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = ego_transform.location + forward * 25.0 - right * 3.5
+            loc = ego_loc + forward * spawn_dist + right * 3.5
             loc.z += 0.5
-            rot = carla.Rotation(yaw=ego_transform.rotation.yaw + 180.0)
+            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw + 180.0, roll=0.0)
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+
             if self.target_actor:
                 self.actors.append(self.target_actor)
-                vel = forward * -10.0
+                vel = rot.get_forward_vector() * 10.0
                 self.target_actor.set_target_velocity(vel)
                 
         elif seq == 'D':
             bp = self.blueprint_library.filter('vehicle.toyota.prius')[0]
-            loc = ego_transform.location + forward * 20.0
+            loc = ego_loc + forward * spawn_dist
             loc.z += 0.5
             rot = ego_transform.rotation
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+
             if self.target_actor:
                 self.actors.append(self.target_actor)
                 self.target_actor.set_autopilot(False)
                 control = carla.VehicleControl()
                 control.brake = 1.0
                 self.target_actor.apply_control(control)
+                
+        elif seq == 'E':
+            bp_list = self.blueprint_library.filter('vehicle.ford.mustang')
+            bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('vehicle.*')[0]
+            loc = ego_loc + forward * spawn_dist + right * 15.0
+            loc.z += 0.5
+            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw - 90.0, roll=0.0)
+            target_transform = carla.Transform(loc, rot)
+            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+
+            if self.target_actor:
+                self.actors.append(self.target_actor)
+                control = carla.VehicleControl()
+                control.throttle = 1.0
+                self.target_actor.apply_control(control)
 
     def run_sequence(self):
-        """
-        全シナリオ(A -> B -> C -> D)を連続走行。
-        """
-        print("
-===== Starting Open-World Dynamic Hazard Sequence =====")
-        
+        import random
+        import numpy as np
         target_speed_kph = 40.0
+        consecutive_stopped_ticks = 0
+
+        seq = random.choice(['A', 'B', 'C', 'D', 'E'])
+        spawn_dist = random.uniform(30.0, 40.0)
+
         if self.demo_mode:
-            self._setup_mock_scenario('A', target_speed_kph)
-            self.current_scenario = 'A'
-            for _ in range(100):
-                self.run_step('A', target_speed_kph)
+            self._setup_mock_scenario(seq, target_speed_kph)
+            self.current_scenario = seq
+            for _ in range(40):
+                self.run_step(seq, target_speed_kph)
+            self.trigger_dist = self.scenario_start_x + (self.mock_env.ego_pos[0] - self.scenario_start_x) - 0.1
+            for tick in range(100):
+                self.run_step(seq, target_speed_kph)
         else:
             self._setup_real_scenario('sequence', target_speed_kph)
-            scenarios = ['A', 'B', 'C', 'D']
+            self.current_scenario = seq
             
-            print("[INFO] Initializing Autopilot... Waiting 100 ticks for good visuals.")
-            for _ in range(100):
+            for _ in range(40):
                 self.run_step('sequence', target_speed_kph)
                 
-            for seq in scenarios:
-                self.current_scenario = seq
-                print(f"[INFO] Accelerating for Scenario {seq}...")
-                for _ in range(40):
-                    self.run_step('sequence', target_speed_kph)
+            self._inject_dynamic_hazard(seq, spawn_dist)
+            
+            for tick in range(100):
+                try:
+                    import carla
+                    if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
+                        if seq == 'B' and tick == 30:
+                            control = carla.VehicleControl()
+                            control.brake = 1.0
+                            control.throttle = 0.0
+                            self.target_actor.apply_control(control)
+                        elif seq == 'C' and tick == 50:
+                            control = carla.VehicleControl()
+                            control.throttle = 0.5
+                            control.steer = -0.6
+                            self.target_actor.apply_control(control)
+                except ImportError:
+                    pass
                     
-                self._inject_dynamic_hazard(seq)
-                
-                for tick in range(100):
-                    try:
-                        import carla
-                        if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
-                            if seq == 'B' and tick == 30:
-                                control = carla.VehicleControl()
-                                control.brake = 1.0
-                                control.throttle = 0.0
-                                self.target_actor.apply_control(control)
-                            elif seq == 'C' and tick == 20:
-                                control = carla.VehicleControl()
-                                control.throttle = 0.6
-                                control.steer = -0.5
-                                self.target_actor.apply_control(control)
-                    except ImportError:
-                        pass
+                log = self.run_step(seq, target_speed_kph)
+
+                if hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None:
+                    vel = self.ego_vehicle.get_velocity()
+                    ego_speed = 3.6 * np.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
+                    if tick > 15 and ego_speed < 0.5:
+                        consecutive_stopped_ticks += 1
+                    else:
+                        consecutive_stopped_ticks = 0
                         
-                    log = self.run_step(seq, target_speed_kph)
-                    if tick % 10 == 0:
-                        print(f"DynSeq [{seq}] Step {tick}: Gap={log.get('perception_gap', 0):.2f}")
+                    if consecutive_stopped_ticks >= 5:
+                        print(f"[Tick {tick}] Break loop due to stop.")
+                        break
                         
-                if hasattr(self, 'target_actor') and self.target_actor is not None:
-                    print(f"[INFO] Clearing hazard {seq} to resume driving.")
-                    self.target_actor.destroy()
-                    if self.target_actor in self.actors:
-                        self.actors.remove(self.target_actor)
-                    self.target_actor = None
-                    
-                self._save_worst_image(seq)
-                
+            self._save_worst_image(seq)
+
         if not self.demo_mode:
             self._destroy_actors()
 
     def shutdown(self):
+
         if hasattr(self, 'video_writer'):
             self.video_writer.release()
             print("[INFO] Video saved to results/sensor_record.mp4")
+
             
         if not self.demo_mode:
             self._destroy_actors()
@@ -1231,6 +1358,7 @@ class CameraOnlyExperiment:
             print("[INFO] CARLA synchronous mode disabled.")
 
     def export_training_data(self, filepath="results/distance_training_data.csv"):
+
         if not self.training_data:
             print("[WARNING] No training data collected to export.")
             return
@@ -1238,6 +1366,7 @@ class CameraOnlyExperiment:
         df = pd.DataFrame(self.training_data)
         df.to_csv(filepath, index=False)
         print(f"[SUCCESS] Exported {len(df)} distance training samples to {filepath}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Camera-Only ADAS Scenario Experiment Runner")
@@ -1256,6 +1385,7 @@ if __name__ == "__main__":
     experiment = CameraOnlyExperiment(demo_mode=args.demo)
     try:
         experiment.set_weather_params(args.sun_alt, args.precip, args.fog)
+
         
         if args.scenario == 'sequence':
             experiment.run_sequence()
