@@ -1024,6 +1024,7 @@ class CameraOnlyExperiment:
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
             'dist_gt': dist_gt,
+            'v_approach': measured_rel_vel,
             'r_fusion': r_fusion,
             'r_perceived': r_perceived,
             'r_gt': r_gt,
