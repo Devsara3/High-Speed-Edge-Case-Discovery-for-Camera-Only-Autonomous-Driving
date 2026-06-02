@@ -14,7 +14,8 @@ from carla_mock import MockCarlaEnv
 
 from hsc_emulator import HSCEmulator
 
-# CARLA縺ｮ繧､繝ｳ繝昴・繝郁ｩｦ陦・try:
+# CARLA縺ｮ繧､繝ｳ繝昴・繝郁ｩｦ陦・
+try:
     import carla
     import queue
     CARLA_AVAILABLE = True
@@ -435,6 +436,31 @@ class CameraOnlyExperiment:
         self.ego_vehicle = None
         self.camera = None
         self.target_actor = None
+
+
+    def set_weather_params(self, sun_alt, precip, fog):
+        self.current_weather = {
+            'sun_altitude_angle': sun_alt,
+            'precipitation': precip,
+            'fog_density': fog
+        }
+        if self.demo_mode:
+            self.mock_env.sun_altitude_angle = sun_alt
+            self.mock_env.precipitation = precip
+            self.mock_env.fog_density = fog
+        else:
+            try:
+                import carla
+                weather = self.world.get_weather()
+                weather.sun_altitude_angle = sun_alt
+                weather.precipitation = precip
+                weather.fog_density = fog
+                weather.precipitation_deposits = precip
+                weather.wind_intensity = 10.0
+                weather.wetness = precip
+                self.world.set_weather(weather)
+            except Exception as e:
+                print(f'[WARNING] Failed to set CARLA weather: {e}')
 
     def run_step(self, scenario_name, target_speed_kph):
         """

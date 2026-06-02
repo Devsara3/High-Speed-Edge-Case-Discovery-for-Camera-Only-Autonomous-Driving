@@ -80,6 +80,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
                 print(f"    Params: Sun Alt={sun_altitude_angle:.2f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
                 
         finally:
+            experiment.export_log_data()
             experiment.shutdown()
             
         elapsed_time = time.time() - start_time
