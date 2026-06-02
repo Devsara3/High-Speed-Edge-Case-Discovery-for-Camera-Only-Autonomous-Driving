@@ -86,7 +86,8 @@ class CameraOnlyExperiment:
             self.target_actor = None
             self.image_queue = queue.Queue()
             
-            # 蜷梧悄繝｢繝ｼ繝芽ｨｭ螳・            self.traffic_manager = self.client.get_trafficmanager()
+            # 蜷梧悄繝｢繝ｼ繝芽ｨｭ螳・
+            self.traffic_manager = self.client.get_trafficmanager()
             self.traffic_manager.set_synchronous_mode(True)
             self.original_settings = self.world.get_settings()
             self.settings = self.world.get_settings()
