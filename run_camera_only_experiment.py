@@ -1372,16 +1372,20 @@ class CameraOnlyExperiment:
                 
             self._inject_dynamic_hazard(seq, spawn_dist)
             
-            for tick in range(100):
+            scenario_phase = 0
+            tick = 0
+            
+            while True:
+                tick += 1
                 try:
                     import carla
                     if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
-                        if seq == 'B' and tick == 30:
+                        if seq == 'B' and scenario_phase == 0 and tick == 30:
                             control = carla.VehicleControl()
                             control.brake = 1.0
                             control.throttle = 0.0
                             self.target_actor.apply_control(control)
-                        elif seq == 'C' and tick == 50:
+                        elif seq == 'C' and scenario_phase == 0 and tick == 50:
                             control = carla.VehicleControl()
                             control.throttle = 0.5
                             control.steer = -0.6
@@ -1392,16 +1396,47 @@ class CameraOnlyExperiment:
                 log = self.run_step(seq, target_speed_kph)
 
                 if hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None:
+                    import numpy as np
                     vel = self.ego_vehicle.get_velocity()
                     ego_speed = 3.6 * np.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
+                    
                     if tick > 15 and ego_speed < 0.5:
                         consecutive_stopped_ticks += 1
                     else:
                         consecutive_stopped_ticks = 0
                         
                     if consecutive_stopped_ticks >= 5:
-                        print(f"[Tick {tick}] Break loop due to stop.")
-                        break
+                        print(f"[Tick {tick}] Stopped for 5 ticks at Phase {scenario_phase}.")
+                        if scenario_phase == 0:
+                            if hasattr(self, 'target_actor') and self.target_actor:
+                                print(f"[Tick {tick}] Destroying initial obstacle (Scenario {seq}).")
+                                self.target_actor.destroy()
+                                self.target_actor = None
+                            consecutive_stopped_ticks = 0
+                            scenario_phase = 1
+                        elif scenario_phase == 2:
+                            print(f"[Tick {tick}] FULL SEQUENCE SUCCESS (Vehicle at 30m).")
+                            break
+                            
+                    if scenario_phase == 1 and ego_speed > 5.0:
+                        print(f"[Tick {tick}] Ego resumed driving. Spawning second obstacle at 30m.")
+                        try:
+                            import carla
+                            ego_tf = self.ego_vehicle.get_transform()
+                            forward_vector = ego_tf.get_forward_vector()
+                            car_transform = carla.Transform(ego_tf.location + forward_vector * 30.0, ego_tf.rotation)
+                            bp = self.blueprint_library.filter('vehicle.tesla.model3')[0]
+                            self.target_actor = self.world.try_spawn_actor(bp, car_transform)
+                            if self.target_actor:
+                                self.actors.append(self.target_actor)
+                                self.target_actor.set_autopilot(False)
+                                scenario_phase = 2
+                        except Exception as e:
+                            print(f"Spawn Error at Phase 2: {e}")
+                            
+                if tick > 1000:
+                    print("[Timeout] Forcing end of trial.")
+                    break
                         
             self._save_worst_image(seq)
 
