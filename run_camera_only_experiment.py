@@ -3,6 +3,10 @@ import sys
 import time
 import argparse
 import numpy as np
+
+# Scenario cycling counter (A→B→C→D→E→A→...)
+_scenario_cycle = 0
+_SCENARIOS = ['A', 'B', 'C', 'D', 'E']
 import cv2
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -849,10 +853,11 @@ class CameraOnlyExperiment:
                 if det['class'] == 'construction_signal' and z_rel <= 18.0:
                     offset_y = 2.5
                 
-                # AEB 繝悶Ξ繝ｼ繧ｭ蛻､螳・ 閾ｪ霆願ｵｰ陦後Ξ繝ｼ繝ｳ蜀・(|x_rel| < 1.8m) 縺ｮ蜑肴婿髫懷ｮｳ迚ｩ
-                is_lane_hazard = abs(x_rel) < 1.8
-                # 菫｡蜿ｷ讖滂ｼ郁ｵ､繝ｻ鮟・ｼ峨・蛛懈ｭ｢蛻､螳夲ｼ・騾ｲ陦梧婿蜷・Z)縺ｫ縺ゅｌ縺ｰ豁｢縺ｾ繧・
-                is_red_light = det['class'] == 'traffic_light' and det.get('traffic_light_color') in ['red', 'yellow']
+                # Lane hazard: object in ego path (exclude traffic lights for non-E scenarios)
+                is_lane_hazard = (abs(x_rel) < 1.8 
+                                  and det['class'] != 'traffic_light')
+                # Traffic light AEB: disabled (traffic lights never trigger AEB)
+                is_red_light = False
 
                 
                 if (is_lane_hazard or is_red_light) and z_rel < min_hazard_dist:
@@ -868,8 +873,9 @@ class CameraOnlyExperiment:
             min_hazard_dist = float('inf')  # AEB繧堤┌蜉ｹ蛹悶＠縺ｦ襍ｰ繧雁・繧峨○繧・
 
         if min_hazard_dist < 10.0:
-            accel_cmd = -1.0  # 繝輔Ν繝悶Ξ繝ｼ繧ｭ
-            print(f"[AEB ACTIVE] Hazard detected! Estimated Distance: {min_hazard_dist:.2f}m. Full Braking.")
+            accel_cmd = -1.0  # Full Braking
+            hazard_class = closest_hazard.get('class', 'unknown') if closest_hazard else 'unknown'
+            print(f"[AEB ACTIVE] Scenario {scenario_name} | Hazard: {hazard_class} | Dist: {min_hazard_dist:.2f}m | Full Braking.")
         elif min_hazard_dist < 18.0:
             accel_cmd = -0.3  # 隴ｦ蜻頑ｸ幃€・
         
@@ -1098,7 +1104,7 @@ class CameraOnlyExperiment:
                 if getattr(self, '_collision_registered_this_scenario', False) == False:
                     self.scenario_collisions += 1
                     self._collision_registered_this_scenario = True
-                    print(f"[CRASH] Collision detected! Min Distance: {current_min_dist:.2f}m")
+                    print(f"[CRASH] Scenario {scenario_name} | Collision! Min Dist: {current_min_dist:.2f}m")
                     
         log_entry['min_gt_distance'] = self.scenario_min_distance
         # HUDのテキスト描画と動画保存
@@ -1310,27 +1316,44 @@ class CameraOnlyExperiment:
         forward = target_wp.transform.get_forward_vector()
         right = target_wp.transform.get_right_vector()
 
+        # Set traffic light to green for A, B, C, D scenarios
+        if seq in ['A', 'B', 'C', 'D']:
+            try:
+                import carla
+                for tl in self.world.get_actors().filter('traffic.traffic_light'):
+                    if tl.get_location().distance(target_wp.transform.location) < 20.0:
+                        tl.set_state(carla.TrafficLightState.Green)
+                        tl.freeze(True)
+                        break
+            except:
+                pass
+
         if seq == 'A':
             bp_list = self.blueprint_library.filter('walker.pedestrian.0001')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('walker.*')[0]
-            loc = base_loc - right * 3.5
-            loc.z += 1.0
-            rot = carla.Rotation(yaw=target_wp.transform.rotation.yaw + 90.0)
-            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
+            # Place pedestrian directly in front of ego, offset right 3m
+            fwd = ego_transform.get_forward_vector()
+            ego_right = ego_transform.get_right_vector()
+            loc = ego_transform.location + fwd * 30.0 - ego_right * 3.0
+            loc.z += 0.5
+            rot = carla.Rotation(yaw=ego_transform.rotation.yaw + 90.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, fwd)
+            self.trigger_dist = 30.0 - (1.39 * 3.0 / 1.39)  # ~27m trigger for walker crossing
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
                 control = carla.WalkerControl()
-                control.direction = right
-                control.speed = 4.5
+                control.direction = ego_right
+                control.speed = 1.39
                 self.target_actor.apply_control(control)
                 
         elif seq == 'B':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = base_loc
+            fwd = ego_transform.get_forward_vector()
+            loc = ego_transform.location + fwd * 30.0
             loc.z += 1.0
-            rot = target_wp.transform.rotation
-            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
+            rot = ego_transform.rotation
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, fwd)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1338,22 +1361,30 @@ class CameraOnlyExperiment:
                 
         elif seq == 'C':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = base_loc + right * 3.5
+            # Same as E: 35m ahead + 6m right, facing left across road
+            fwd = ego_transform.get_forward_vector()
+            ego_right = ego_transform.get_right_vector()
+            loc = ego_transform.location + fwd * 35.0 + ego_right * 6.0
             loc.z += 1.0
-            rot = carla.Rotation(pitch=0.0, yaw=target_wp.transform.rotation.yaw + 180.0, roll=0.0)
-            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
+            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw - 90.0, roll=0.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, fwd)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
-                vel = rot.get_forward_vector() * 10.0
-                self.target_actor.set_target_velocity(vel)
+                # Steer hard left to cut fully across ego's lane
+                control = carla.VehicleControl()
+                control.throttle = 1.0
+                control.steer = -1.0
+                self.target_actor.apply_control(control)
                 
         elif seq == 'D':
             bp_list = self.blueprint_library.filter('static.prop.constructioncone')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('static.prop.*')[0]
-            loc = base_loc
+            # Place directly in front of ego on its forward path
+            fwd = ego_transform.get_forward_vector()
+            loc = ego_transform.location + fwd * 35.0
             loc.z += 1.0
-            rot = target_wp.transform.rotation
+            rot = ego_transform.rotation
             self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
@@ -1362,10 +1393,14 @@ class CameraOnlyExperiment:
         elif seq == 'E':
             bp_list = self.blueprint_library.filter('vehicle.ford.mustang')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('vehicle.*')[0]
-            loc = base_loc + right * 15.0
+            # Spawn on right side road at junction ahead, facing towards ego's lane
+            fwd = ego_transform.get_forward_vector()
+            ego_right = ego_transform.get_right_vector()
+            loc = ego_transform.location + fwd * 35.0 + ego_right * 6.0
             loc.z += 1.0
-            rot = carla.Rotation(pitch=0.0, yaw=target_wp.transform.rotation.yaw - 90.0, roll=0.0)
-            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
+            # Face towards ego's lane (perpendicular, turning left from right)
+            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw - 90.0, roll=0.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, fwd)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1374,12 +1409,14 @@ class CameraOnlyExperiment:
                 self.target_actor.apply_control(control)
 
     def run_sequence(self):
+        global _scenario_cycle
         import random
         import numpy as np
         target_speed_kph = 40.0
         consecutive_stopped_ticks = 0
 
-        seq = random.choice(['A', 'B', 'C', 'D', 'E'])
+        seq = _SCENARIOS[_scenario_cycle % 5]
+        _scenario_cycle += 1
         spawn_dist = random.uniform(30.0, 40.0)
 
         if self.demo_mode:
@@ -1397,13 +1434,24 @@ class CameraOnlyExperiment:
             for _ in range(40):
                 self.run_step('sequence', target_speed_kph)
                 
-            self._inject_dynamic_hazard(seq, spawn_dist)
+            # Delayed spawn for C (wait 10 ticks before appearing)
+            if seq != 'C':
+                self._inject_dynamic_hazard(seq, spawn_dist)
+            
+            print(f"\n===== [Trial Start] Scenario {seq} | Phase 0 | Weather: sun={getattr(self,'current_weather',{}).get('sun_altitude_angle',90):.1f}deg rain={getattr(self,'current_weather',{}).get('precipitation',0):.1f} fog={getattr(self,'current_weather',{}).get('fog_density',0):.1f} =====")
             
             scenario_phase = 0
             tick = 0
+            c_spawned = False  # delayed spawn flag for C
             
             while True:
                 tick += 1
+                
+                # Delayed C spawn at tick 10
+                if seq == 'C' and not c_spawned and tick == 10:
+                    self._inject_dynamic_hazard(seq, spawn_dist)
+                    c_spawned = True
+                
                 try:
                     import carla
                     if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
@@ -1412,11 +1460,7 @@ class CameraOnlyExperiment:
                             control.brake = 1.0
                             control.throttle = 0.0
                             self.target_actor.apply_control(control)
-                        elif seq == 'C' and scenario_phase == 0 and tick == 50:
-                            control = carla.VehicleControl()
-                            control.throttle = 0.5
-                            control.steer = -0.6
-                            self.target_actor.apply_control(control)
+
                 except ImportError:
                     pass
                     
@@ -1433,48 +1477,88 @@ class CameraOnlyExperiment:
                         consecutive_stopped_ticks = 0
                         
                     if consecutive_stopped_ticks >= 5:
-                        print(f"[Tick {tick}] Stopped for 5 ticks at Phase {scenario_phase}.")
+                        print(f"[Tick {tick}] Scenario {seq} | Phase {scenario_phase} | Stopped for 5 ticks.")
                         if scenario_phase == 0:
                             if hasattr(self, 'target_actor') and self.target_actor:
-                                print(f"[Tick {tick}] Destroying initial obstacle (Scenario {seq}).")
+                                print(f"[Tick {tick}] Scenario {seq} | Destroying initial obstacle.")
                                 self.target_actor.destroy()
                                 self.target_actor = None
                             consecutive_stopped_ticks = 0
                             scenario_phase = 1
                         elif scenario_phase == 2:
-                            print(f"[Tick {tick}] FULL SEQUENCE SUCCESS (Vehicle at 30m).")
+                            print(f"[Tick {tick}] Scenario {seq} | FULL SEQUENCE SUCCESS.")
                             break
                             
                     if scenario_phase == 1 and ego_speed > 5.0:
-                        print(f"[Tick {tick}] Ego resumed driving. Spawning second obstacle at 30m.")
+                        print(f"[Tick {tick}] Scenario {seq} | Ego resumed. Spawning Phase 2 obstacle.")
                         try:
                             import carla
                             ego_tf = self.ego_vehicle.get_transform()
-                            wp = self.world.get_map().get_waypoint(ego_tf.location)
-                            target_wps = wp.next(30.0)
-                            target_wp = target_wps[0] if target_wps else wp
-                            
-                            car_loc = target_wp.transform.location
+                            fwd = ego_tf.get_forward_vector()
+                            ego_right = ego_tf.get_right_vector()
+                            car_loc = ego_tf.location + fwd * 30.0
                             car_loc.z += 1.0
-                            forward = target_wp.transform.get_forward_vector()
+                            rot = ego_tf.rotation
                             
-                            bp = self.blueprint_library.filter('vehicle.tesla.model3')[0]
-                            self.target_actor = self._safe_spawn_actor(bp, car_loc, target_wp.transform.rotation, forward)
+                            if seq == 'A':
+                                bp = self.blueprint_library.filter('walker.pedestrian.0001')[0]
+                                ped_loc = ego_tf.location + fwd * 30.0 - ego_right * 3.0
+                                ped_loc.z += 0.5
+                                ped_rot = carla.Rotation(yaw=ego_tf.rotation.yaw + 90.0)
+                                self.target_actor = self._safe_spawn_actor(bp, ped_loc, ped_rot, fwd)
+                                if self.target_actor:
+                                    self.actors.append(self.target_actor)
+                                    control = carla.WalkerControl()
+                                    control.direction = ego_right
+                                    control.speed = 1.39
+                                    self.target_actor.apply_control(control)
+                            elif seq == 'B':
+                                bp = self.blueprint_library.filter('model3')[0]
+                                self.target_actor = self._safe_spawn_actor(bp, car_loc, rot, fwd)
+                                if self.target_actor:
+                                    self.actors.append(self.target_actor)
+                                    self.target_actor.set_target_velocity(self.ego_vehicle.get_velocity())
+                                    self.lead_decel_ticks = 0
+                                    self.lead_decel_started = True
+                                    self.lead_deceleration = -9.0
+                            elif seq == 'C':
+                                bp = self.blueprint_library.filter('model3')[0]
+                                c_loc = ego_tf.location + fwd * 35.0 + ego_right * 6.0
+                                c_loc.z += 1.0
+                                c_rot = carla.Rotation(yaw=ego_tf.rotation.yaw - 90.0)
+                                self.target_actor = self._safe_spawn_actor(bp, c_loc, c_rot, fwd)
+                                if self.target_actor:
+                                    self.actors.append(self.target_actor)
+                                    control = carla.VehicleControl()
+                                    control.throttle = 1.0
+                                    control.steer = -1.0
+                                    self.target_actor.apply_control(control)
+                            elif seq == 'D':
+                                bp = self.blueprint_library.filter('static.prop.constructioncone')[0]
+                                d_loc = ego_tf.location + fwd * 35.0
+                                d_loc.z += 1.0
+                                self.target_actor = self._safe_spawn_actor(bp, d_loc, rot, fwd)
+                                if self.target_actor:
+                                    self.actors.append(self.target_actor)
+                            elif seq == 'E':
+                                bp = self.blueprint_library.filter('vehicle.ford.mustang')[0]
+                                e_loc = ego_tf.location + fwd * 35.0 + ego_right * 6.0
+                                e_loc.z += 1.0
+                                e_rot = carla.Rotation(yaw=ego_tf.rotation.yaw - 90.0)
+                                self.target_actor = self._safe_spawn_actor(bp, e_loc, e_rot, fwd)
+                                if self.target_actor:
+                                    self.actors.append(self.target_actor)
+                                    control = carla.VehicleControl()
+                                    control.throttle = 1.0
+                                    self.target_actor.apply_control(control)
+                            
                             if self.target_actor:
-                                self.actors.append(self.target_actor)
-                                self.target_actor.set_autopilot(False)
-                                # Phase 2: lead vehicle emergency brake (Scenario B)
-                                self.lead_decel_ticks = 0
-                                self.lead_decel_started = True
-                                self.lead_deceleration = -9.0  # emergency brake
-                                seq = 'B'
-                                self.current_scenario = 'B'
                                 scenario_phase = 2
                         except Exception as e:
                             print(f"Spawn Error at Phase 2: {e}")
                             
                 if tick > 200:
-                    print("[Timeout] Forcing end of trial.")
+                    print(f"[Timeout] Scenario {seq} | Forcing end of trial.")
                     break
                         
             self._save_worst_image(seq)
