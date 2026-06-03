@@ -7,7 +7,9 @@ import cv2
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# 繝ｪ繧ｹ繧ｯ險育ｮ励け繝ｩ繧ｹ縺ｨYOLO隧穂ｾ｡蝎ｨ縺ｮ隱ｭ縺ｿ霎ｼ縺ｿ
+from hsc_emulator import HSCEmulator
+
+# リスク計算クラスとYOLO評価器の読み込みｿ
 from risk_calculator import RiskCalculator
 from evaluator import YoloEvaluator
 from carla_mock import MockCarlaEnv
@@ -28,6 +30,7 @@ class CameraOnlyExperiment:
         self.record_video = record_video
         self.video_frames = []
         self.evaluator = YoloEvaluator()
+        self.hsc_emulator = HSCEmulator()
         self.risk_calculator = RiskCalculator()
         self.camera_type = 'RGB' # 繝・ヵ繧ｩ繝ｫ繝医・RGB
         self.actors = []
@@ -745,6 +748,21 @@ class CameraOnlyExperiment:
                         self.target_actor.apply_control(control)
             
             yolo_detections = self.evaluator.evaluate_multi(image_left, image_right=image_right, ego_speed=ego_vel[0])
+            
+            # --- HSC ---
+            current_fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
+            target_box = None
+            if yolo_detections and 'bbox_2d' in yolo_detections[0]:
+                x1, y1, x2, y2 = yolo_detections[0]['bbox_2d']
+                target_box = [int(y1), int(x1), int(y2), int(x2)]
+            elif yolo_detections and 'bbox' in yolo_detections[0]:
+                x1, y1, x2, y2 = yolo_detections[0]['bbox']
+                target_box = [int(y1), int(x1), int(y2), int(x2)]
+
+            dist_hsi = float('inf')
+            if hasattr(self, 'hsc_emulator'):
+                dist_hsi = self.hsc_emulator.estimate_distance_from_image(image_left, current_fog, target_bbox=target_box)
+                
             image = image_left.copy() if image_left is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
             
             gt_obstacles = []
@@ -920,6 +938,7 @@ class CameraOnlyExperiment:
         global_dist_camera = float('inf')
         global_dist_stereo = float('inf')
         global_dist_ai = float('inf')
+        global_dist_hsi = float('inf')
         
         # YOLO縺ｮ蜷・ヰ繧ｦ繝ｳ繝・ぅ繝ｳ繧ｰ繝懊ャ繧ｯ繧ｹ蜀・〒縲´iDAR縺ｨStereo縺ｮ遨ｺ髢薙ヵ繝･繝ｼ繧ｸ繝ｧ繝ｳ繧貞ｮ溯｡・
         for det in yolo_detections:
@@ -966,6 +985,7 @@ class CameraOnlyExperiment:
                     global_dist_camera = stereo_d
                     global_dist_stereo = actual_stereo
                     global_dist_ai = actual_ai
+                    global_dist_hsi = dist_hsi
                     
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
@@ -1026,6 +1046,7 @@ class CameraOnlyExperiment:
             'dist_camera': global_dist_camera,
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
+            'dist_hsi': global_dist_hsi,
             'dist_gt': dist_gt,
             'v_approach': measured_rel_vel,
             'r_fusion': r_fusion,
@@ -1454,7 +1475,7 @@ if __name__ == "__main__":
         else:
             experiment.run_experiment(args.scenario, target_speed_kph=args.ego_speed, gap=args.gap, deceleration=args.decel)
             
-        experiment.visualize_and_save(args.save_path, scenario_name=args.scenario)
+        # experiment.visualize_and_save(args.save_path, scenario_name=args.scenario)
         
     finally:
         experiment.shutdown()

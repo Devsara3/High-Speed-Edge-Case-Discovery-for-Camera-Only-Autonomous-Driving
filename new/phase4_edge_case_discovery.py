@@ -16,7 +16,8 @@ def calculate_transparent_risk(df_merged, K=10.0, epsilon=0.01):
         df_merged['w_lidar'] * df_merged['dist_lidar'] +
         df_merged['w_stereo'] * df_merged['dist_stereo'] +
         df_merged['w_camera'] * df_merged['dist_camera'] +
-        df_merged['w_ai'] * df_merged['dist_ai']
+        df_merged['w_ai'] * df_merged['dist_ai'] +
+        df_merged['w_hsi'] * df_merged['dist_hsi']
     )
     
     # 3. 遠ざかるハザードへの最低リスク保証 (0.1)
@@ -41,15 +42,16 @@ def generate_mock_data():
     weights_data = []
     for p in range(0, 101, 10):
         for f in range(0, 101, 10):
-            for s in range(-90, 91, 15):
-                w_ai = (p + f) / 200.0 if (p + f) > 0 else 0.25
+                w_ai = (p + f) / 200.0 if (p + f) > 0 else 0.2
+                w_hsi = 0.1
                 if -30 <= s <= 30: # 日差しが強いときはLiDAR等への依存を増やすモック
-                    w_ai = min(w_ai + 0.1, 0.9)
-                remaining = 1.0 - w_ai
+                    w_ai = min(w_ai + 0.1, 0.5)
+                    w_hsi = min(w_hsi + 0.1, 0.5)
+                remaining = 1.0 - w_ai - w_hsi
                 weights_data.append({
                     'precipitation': float(p), 'fog': float(f), 'sun_altitude': float(s),
                     'w_lidar': remaining * 0.5, 'w_stereo': remaining * 0.3,
-                    'w_camera': remaining * 0.2, 'w_ai': w_ai
+                    'w_camera': remaining * 0.2, 'w_ai': w_ai, 'w_hsi': w_hsi
                 })
     pd.DataFrame(weights_data).to_csv('optimized_weather_weights.csv', index=False)
     
@@ -77,7 +79,8 @@ def generate_mock_data():
             'dist_lidar': dist_gt + np.random.normal(0, 0.1 * noise_factor, 100),
             'dist_stereo': dist_gt + np.random.normal(0, 0.5 * noise_factor, 100),
             'dist_camera': dist_gt + np.random.normal(0, 1.2 * noise_factor, 100),
-            'dist_ai': dist_gt + np.random.normal(0, 0.2 * noise_factor, 100)
+            'dist_ai': dist_gt + np.random.normal(0, 0.2 * noise_factor, 100),
+            'dist_hsi': dist_gt + np.random.normal(0, 0.15 * noise_factor, 100)
         })
         if p >= 80 and f >= 80 and -10 <= sun <= 10:
             df_trial['v_approach'] *= 2.5
@@ -138,11 +141,10 @@ def main():
     df_final_archive = pd.concat(all_timesteps_list)
     df_summary = pd.DataFrame(all_trials_summary)
     
-    # プロット用のCSVと同じファイル名にしつつ、全カラムを保持
     output_columns = [
         'tick', 'scenario_type', 'precipitation', 'fog', 'sun_altitude',
-        'dist_gt', 'dist_lidar', 'dist_stereo', 'dist_camera', 'dist_ai',
-        'w_lidar', 'w_stereo', 'w_camera', 'w_ai',
+        'dist_gt', 'dist_lidar', 'dist_stereo', 'dist_camera', 'dist_ai', 'dist_hsi',
+        'w_lidar', 'w_stereo', 'w_camera', 'w_ai', 'w_hsi',
         'd_fusion', 'v_approach', 'v_app_clamped',
         'mu_factor', 'risk_numerator', 'risk_denominator', 'risk_score'
     ]

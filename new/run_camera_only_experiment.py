@@ -902,8 +902,9 @@ class CameraOnlyExperiment:
         global_dist_camera = float('inf')
         global_dist_stereo = float('inf')
         global_dist_ai = float('inf')
+        global_dist_hsi = float('inf')
         
-        # YOLO縺ｮ蜷・ヰ繧ｦ繝ｳ繝・ぅ繝ｳ繧ｰ繝懊ャ繧ｯ繧ｹ蜀・〒縲´iDAR縺ｨStereo縺ｮ遨ｺ髢薙ヵ繝･繝ｼ繧ｸ繝ｧ繝ｳ繧貞ｮ溯｡・
+        # YOLOの各バウンディングボックス内で、LiDARとStereoの空間フュージョンを実行
         for det in yolo_detections:
             stereo_d = det.get('z_distance', float('inf'))
             actual_stereo = det.get('dist_stereo', float('inf'))
@@ -947,7 +948,8 @@ class CameraOnlyExperiment:
                     global_dist_lidar = lidar_d
                     global_dist_camera = stereo_d
                     global_dist_stereo = actual_stereo
-                    global_dist_ai = dist_hsi
+                    global_dist_ai = actual_ai
+                    global_dist_hsi = dist_hsi
                     
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
@@ -1009,6 +1011,7 @@ class CameraOnlyExperiment:
             'dist_camera': global_dist_camera,
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
+            'dist_hsi': global_dist_hsi,
             'dist_gt': dist_gt,
             'v_approach': measured_rel_vel,
             'r_fusion': r_fusion,
@@ -1437,7 +1440,7 @@ if __name__ == "__main__":
         else:
             experiment.run_experiment(args.scenario, target_speed_kph=args.ego_speed, gap=args.gap, deceleration=args.decel)
             
-        experiment.visualize_and_save(args.save_path, scenario_name=args.scenario)
+        # experiment.visualize_and_save(args.save_path, scenario_name=args.scenario)
         
     finally:
         experiment.shutdown()
