@@ -699,7 +699,10 @@ class CameraOnlyExperiment:
             # --- HSC蜷域・ ---
 
             if hasattr(self, 'hsc_emulator') and depth_img is not None and seg_img is not None:
-                hsc_image = self.hsc_emulator.synthesize(image_left, depth_img, seg_img)
+                try:
+                    hsc_image = self.hsc_emulator.synthesize(image_left, depth_img, seg_img)
+                except AttributeError:
+                    hsc_image = image_left
             else:
                 hsc_image = image_left
                 
@@ -1197,6 +1200,15 @@ class CameraOnlyExperiment:
         
     def get_worst_image(self):
         return getattr(self, 'worst_case_image', None)
+        
+    def _save_worst_image(self, scenario_name):
+        """Save worst-case edge-case image to disk."""
+        img = self.get_worst_image()
+        if img is not None:
+            step = getattr(self, 'worst_case_step', 0)
+            filename = f"results/worst_case_{scenario_name}_step{step}.jpg"
+            cv2.imwrite(filename, img)
+            print(f"[SAVE] Worst-case edge-case image saved: {filename}")
         
     def get_worst_step(self):
         return getattr(self, 'worst_case_step', 0)
