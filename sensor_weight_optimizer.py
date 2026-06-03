@@ -69,5 +69,18 @@ class SensorWeightOptimizer:
         print("Meta-Learnerモデルの保存が完了しました。(models/fusion_meta_learner.pkl)")
 
 if __name__ == "__main__":
-    optimizer = SensorWeightOptimizer("results/optuna_history_sequence_Random.csv")
-    optimizer.train_meta_learner()
+    import glob
+    
+    # 最新の experiment_log_*.csv を自動で探す
+    log_files = glob.glob("results/experiment_log_*.csv")
+    if not log_files:
+        # 古い名前へのフォールバック
+        log_files = glob.glob("results/experiment_log.csv")
+        
+    if log_files:
+        latest_csv = max(log_files, key=os.path.getctime)
+        print(f"[{latest_csv}] を読み込んで最適化を開始します...")
+        optimizer = SensorWeightOptimizer(latest_csv)
+        optimizer.train_meta_learner()
+    else:
+        print("エラー: センサーの記録データ(experiment_log_*.csv)が見つかりません。")
