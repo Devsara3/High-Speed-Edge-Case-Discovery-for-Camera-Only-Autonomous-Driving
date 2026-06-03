@@ -3,15 +3,15 @@ import glob
 import numpy as np
 import pandas as pd
 
-def calculate_dynamic_risk(df_merged, K=10.0, epsilon=0.01):
+def calculate_transparent_risk(df_merged, K=10.0, epsilon=0.01):
     """
-    数理モデルに基づき、各タイムステップのリスクスコア R(t) を算出する
+    透明性を完全確保し、全ての計算中間パラメータを明記してリスクスコア R(t) を算出する
     """
-    # 物体クラス（scenario_type）に応じたハザード属性係数 μ のマッピング
+    # 1. 認識ラベル（scenario_type）に応じたハザード属性係数 μ のマッピング
     mu_map = {'A': 1.8, 'B': 1.0, 'C': 1.0, 'D': 1.5, 'E': 2.0}
-    df_merged['mu'] = df_merged['scenario_type'].map(mu_map).fillna(1.0)
+    df_merged['mu_factor'] = df_merged['scenario_type'].map(mu_map).fillna(1.0)
     
-    # 統合距離 d_fusion(t) の算出
+    # 2. 統合距離 d_fusion(t) の算出プロセスの可視化
     df_merged['d_fusion'] = (
         df_merged['w_lidar'] * df_merged['dist_lidar'] +
         df_merged['w_stereo'] * df_merged['dist_stereo'] +
@@ -19,10 +19,16 @@ def calculate_dynamic_risk(df_merged, K=10.0, epsilon=0.01):
         df_merged['w_ai'] * df_merged['dist_ai']
     )
     
-    # リスクスコア R(t) の数理計算
-    # ※接近速度がマイナス（離脱）の場合にリスクがマイナスにならないよう、0以下をカット（np.maximumを追加）
-    v_app_clamped = np.maximum(0, df_merged['v_approach'])
-    df_merged['risk_score'] = (K * df_merged['mu'] * v_app_clamped) / (df_merged['d_fusion']**2 + epsilon)
+    # 3. 遠ざかるハザードへの最低リスク保証 (0.1)
+    df_merged['v_app_clamped'] = np.where(df_merged['v_approach'] > 0, df_merged['v_approach'], 0.1)
+    
+    # 4. リスクスコア R(t) の数理計算
+    # 式の透明性を確認できるよう、分子 (numerator) と分母 (denominator) もカラムに分離して保存
+    df_merged['risk_numerator'] = K * df_merged['mu_factor'] * df_merged['v_app_clamped']
+    df_merged['risk_denominator'] = (df_merged['d_fusion'] ** 2) + epsilon
+    
+    df_merged['risk_score'] = df_merged['risk_numerator'] / df_merged['risk_denominator']
+    
     return df_merged
 
 def generate_mock_data():
@@ -33,10 +39,8 @@ def generate_mock_data():
     
     # 1. Phase 3 のダミー重みデータ作成
     weights_data = []
-    # ※merge時の欠落を防ぐため、10%刻み(step=10)に変更しています
     for p in range(0, 101, 10):
         for f in range(0, 101, 10):
-            # 霧や雨が強いほど AI (w_ai) の重みが上がるダミー特性
             w_ai = (p + f) / 200.0 if (p + f) > 0 else 0.25
             remaining = 1.0 - w_ai
             weights_data.append({
@@ -54,12 +58,15 @@ def generate_mock_data():
         sun = np.random.uniform(-90, 90)
         scenario = np.random.choice(scenarios)
         
-        # 1トライアルあたり100コマの時系列データ
         ticks = np.arange(1, 101)
-        dist_gt = np.linspace(40, 0.5, 100) # 近づいてくるハザード
-        v_approach = np.random.uniform(5, 15, 100)
-        
-        # 悪天候ほどセンサーが狂うノイズを付加
+        # 半分のデータは接近、半分のデータは遠ざかる（安全弁のテスト用）
+        if i % 2 == 0:
+            dist_gt = np.linspace(40, 0.5, 100)
+            v_approach = np.random.uniform(5, 15, 100)
+        else:
+            dist_gt = np.linspace(5.0, 30.0, 100)
+            v_approach = np.linspace(-2.0, -10.0, 100)
+            
         noise_factor = (p + f) / 50.0
         df_trial = pd.DataFrame({
             'tick': ticks, 'precipitation': p, 'fog': f, 'sun_altitude': sun,
@@ -69,31 +76,27 @@ def generate_mock_data():
             'dist_camera': dist_gt + np.random.normal(0, 1.2 * noise_factor, 100),
             'dist_ai': dist_gt + np.random.normal(0, 0.2 * noise_factor, 100)
         })
-        # 特定の天候（例: 降水80, 霧80, 西日付近）で大クラッシュ（高リスク）が起きる仕込み
         if p >= 80 and f >= 80 and -10 <= sun <= 10:
             df_trial['v_approach'] *= 2.5
-            df_trial['dist_stereo'] += 15.0 # ステレオが激しく狂う
+            df_trial['dist_stereo'] += 15.0 
             
         df_trial.to_csv(f'new/logs/trial_{i:03d}.csv', index=False)
     print("[SUCCESS] Verification用のモックデータ（重みCSV 1本 & 走行ログ 50本）を生成しました。")
 
 def main():
-    # ログがない場合はモックを生成
     if not os.path.exists('new/optimized_weather_weights.csv') or not glob.glob('new/logs/trial_*.csv'):
         generate_mock_data()
         
-    # データの読み込み
     df_weights = pd.read_csv('new/optimized_weather_weights.csv')
     log_files = glob.glob('new/logs/trial_*.csv')
     
     all_trials_summary = []
-    all_timesteps_list = [] # 視覚化コードに引き渡す用
+    all_timesteps_list = []
     
-    print(f"[INFO] {len(log_files)} 本の走行ログをスキャン中...")
+    print(f"[INFO] {len(log_files)} 本のログから数理パラメータを全出力してマージ中...")
     for file in log_files:
         df_log = pd.read_csv(file)
         
-        # 重みテーブルと天候（10%刻みの丸め）でマージ
         df_log['precip_grid'] = np.round(df_log['precipitation'] / 10.0) * 10.0
         df_log['fog_grid'] = np.round(df_log['fog'] / 10.0) * 10.0
         
@@ -107,13 +110,11 @@ def main():
         if df_merged.empty:
             continue
             
-        # リスク計算
-        df_calculated = calculate_dynamic_risk(df_merged)
-        all_timesteps_list.append(df_calculated)
+        df_transparent = calculate_transparent_risk(df_merged)
+        all_timesteps_list.append(df_transparent)
         
-        # トライアルごとの Max R(t) を算出
-        max_idx = df_calculated['risk_score'].idxmax()
-        worst_row = df_calculated.loc[max_idx]
+        max_idx = df_transparent['risk_score'].idxmax()
+        worst_row = df_transparent.loc[max_idx]
         
         all_trials_summary.append({
             'scenario_type': worst_row['scenario_type'],
@@ -123,15 +124,35 @@ def main():
             'max_risk_score': worst_row['risk_score']
         })
         
+    if not all_timesteps_list:
+        return
+        
+    df_final_archive = pd.concat(all_timesteps_list)
     df_summary = pd.DataFrame(all_trials_summary)
     
-    # すべてのタイムステップ統合データをプロット用に保存
-    pd.concat(all_timesteps_list).to_csv('new/fused_risk_timeseries.csv', index=False)
+    # プロット用のCSVと同じファイル名にしつつ、全カラムを保持
+    output_columns = [
+        'tick', 'scenario_type', 'precipitation', 'fog', 'sun_altitude',
+        'dist_gt', 'dist_lidar', 'dist_stereo', 'dist_camera', 'dist_ai',
+        'w_lidar', 'w_stereo', 'w_camera', 'w_ai',
+        'd_fusion', 'v_approach', 'v_app_clamped',
+        'mu_factor', 'risk_numerator', 'risk_denominator', 'risk_score'
+    ]
+    existing_cols = [col for col in output_columns if col in df_final_archive.columns]
     
-    # 臨界エッジケースの特定（最大リスクスコアを記録した条件）
+    # plot_results.py が読み込むファイル名に上書き
+    output_csv_path = 'new/fused_risk_timeseries.csv'
+    df_final_archive[existing_cols].to_csv(output_csv_path, index=False)
+    print(f"\n[SUCCESS] リスク計算の透明性を検証するための全ログを {output_csv_path} に保存しました！")
+    
+    print("\n--- 監査用データサンプル（v_approachがマイナス時の挙動） ---")
+    neg_v_sample = df_final_archive[df_final_archive['v_approach'] < 0]
+    if not neg_v_sample.empty:
+        print(neg_v_sample[['tick', 'dist_gt', 'v_approach', 'v_app_clamped', 'risk_score']].head(5))
+    else:
+        print("（※マイナスのv_approachデータはありませんでした）")
+    
     worst_case = df_summary.sort_values(by='max_risk_score', ascending=False).iloc[0]
-    
-    # 日射角のドメインを範囲（±5度）としてマージ
     sun_min = np.floor(worst_case['sun_altitude'] / 5.0) * 5.0
     sun_max = sun_min + 5.0
     
