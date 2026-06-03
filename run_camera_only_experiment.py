@@ -87,6 +87,13 @@ class CameraOnlyExperiment:
             self.client = carla.Client(host, port)
             self.client.set_timeout(10.0)
             self.world = self.client.get_world()
+            # Clean up all leftover actors from previous trials
+            for actor in list(self.world.get_actors()):
+                if actor.type_id.startswith(('vehicle.', 'walker.', 'sensor.', 'controller.')):
+                    try:
+                        actor.destroy()
+                    except:
+                        pass
             self.blueprint_library = self.world.get_blueprint_library()
             self.actors = []
             self.ego_vehicle = None
@@ -1466,7 +1473,7 @@ class CameraOnlyExperiment:
                         except Exception as e:
                             print(f"Spawn Error at Phase 2: {e}")
                             
-                if tick > 1000:
+                if tick > 200:
                     print("[Timeout] Forcing end of trial.")
                     break
                         
