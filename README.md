@@ -1,6 +1,6 @@
 # W-ADAPT: Weather-Adaptive Dynamic Sensor Fusion and High-Speed Edge-Case Discovery for Autonomous Driving
 
-> **Project Scope:** This repository establishes a robust, freeze-free pipeline to automatically sample weather environments, aggregate synchronized multi-sensor datasets, and execute post-process phases for critical edge-case discovery.
+> 📌 **Branch Scope:** This branch (`feature/data-collection`) is dedicated to **Phase 2 (Data Collection)** and the execution framework. It establishes a robust, freeze-free pipeline to automatically sample weather environments and aggregate synchronized multi-sensor datasets before passing them to the post-process phase.
 
 ---
 
@@ -8,7 +8,7 @@
 Conventional autonomous driving systems suffer from a significant drop in single-sensor recognition accuracy due to environmental noise such as heavy rain, fog, and sunlight. This project resolves and quantifies this issue through the following 4-step approach:
 
 - **Scenario Definition (Phase 1)**: Defining five representative hazard scenarios commonly emphasized in autonomous driving system evaluations within the simulator.
-- **Data Collection (Phase 2)**: Sampling diverse weather parameters in the CARLA simulator environment to automatically collect driving logs across hazard scenarios.
+- **[Focus of this Branch] Data Collection (Phase 2)**: Sampling diverse weather parameters in the CARLA simulator environment to automatically collect driving logs across hazard scenarios.
 - **Weather-Adaptive Dynamic Weighting (Phase 3)**: Calculating weights for a weighted linear combination (Late Fusion) that maximizes the accuracy rate for each weather condition using mathematical optimization (SLSQP). This is based on the measurement distance error (in meters) of each sensor.
 - **Critical Edge-Case Discovery (Phase 4)**: Utilizing the optimized distances to calculate a "Dynamic Risk Score Function" to automatically identify and visualize the worst-case weather domains (edge cases) that maximize the overall system hazard level.
 
