@@ -1320,7 +1320,8 @@ class CameraOnlyExperiment:
                 self.target_actor.set_target_velocity(vel)
                 
         elif seq == 'D':
-            bp = self.blueprint_library.filter('vehicle.toyota.prius')[0]
+            bp_list = self.blueprint_library.filter('static.prop.constructioncone')
+            bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('static.prop.*')[0]
             loc = ego_loc + forward * spawn_dist
             loc.z += 1.0
             rot = ego_transform.rotation
@@ -1329,10 +1330,6 @@ class CameraOnlyExperiment:
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
-                self.target_actor.set_autopilot(False)
-                control = carla.VehicleControl()
-                control.brake = 1.0
-                self.target_actor.apply_control(control)
                 
         elif seq == 'E':
             bp_list = self.blueprint_library.filter('vehicle.ford.mustang')
