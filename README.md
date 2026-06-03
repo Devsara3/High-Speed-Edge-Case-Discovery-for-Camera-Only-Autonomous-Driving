@@ -1,6 +1,6 @@
 # W-ADAPT: Weather-Adaptive Dynamic Sensor Fusion and High-Speed Edge-Case Discovery for Autonomous Driving
 
-> 📌 **Branch Scope:** This branch (`feature/data-collection`) is dedicated to **Phase 2 (Data Collection)** and the execution framework. It establishes a robust, freeze-free pipeline to automatically sample weather environments and aggregate synchronized multi-sensor datasets before passing them to the post-process phase.
+> **Branch Scope:** This branch (`feature/data-collection`) is dedicated to **Phase 2 (Data Collection)** and the execution framework. It establishes a robust, freeze-free pipeline to automatically sample weather environments and aggregate synchronized multi-sensor datasets before passing them to the post-process phase.
 
 ---
 
