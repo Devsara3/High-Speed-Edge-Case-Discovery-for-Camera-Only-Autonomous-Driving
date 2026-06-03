@@ -1,6 +1,6 @@
 # W-ADAPT: Weather-Adaptive Dynamic Sensor Fusion and High-Speed Edge-Case Discovery for Autonomous Driving
 
-> 📌 **Project Scope:** This repository establishes a robust, freeze-free pipeline to automatically sample weather environments, aggregate synchronized multi-sensor datasets, and execute post-process phases for critical edge-case discovery.
+> **Project Scope:** This repository establishes a robust, freeze-free pipeline to automatically sample weather environments, aggregate synchronized multi-sensor datasets, and execute post-process phases for critical edge-case discovery.
 
 ---
 
@@ -24,7 +24,7 @@ Although the primary perception layer relies on the **RGB Stereo Camera** with Y
 
 ---
 
-## ⚡ Robustness & Safety Patches Implemented
+##  Robustness & Safety Patches Implemented
 To complete over 500 consecutive automated trials via Optuna without simulator deadlocks or file corruptions, the following explicit engineering solutions have been applied to the scripts:
 1. **Strict Initialization Order (AttributeError Prevention)**: Guaranteed that `self.traffic_manager` is properly instantiated via the client *before* calling `set_synchronous_mode(True)`.
 2. **Deadlock Auto-Escape Loop**: If the ego vehicle's velocity remains below 0.5 km/h for 5 consecutive frames after tick 15 (indicating a full stop or a severe crash), the execution loop automatically `break`s to cleanly transition to the next trial.
