@@ -1016,6 +1016,7 @@ class CameraOnlyExperiment:
             'tick': self.scenario_ticks,
             'precipitation': getattr(self, 'current_weather', {}).get('precipitation', 0.0),
             'fog': getattr(self, 'current_weather', {}).get('fog_density', 0.0),
+            'sun_altitude': getattr(self, 'current_weather', {}).get('sun_altitude_angle', 90.0),
             'scenario_type': getattr(self, 'current_scenario', 'unknown'),
             'ego_x': ego_pos[0],
             'ego_y': ego_pos[1],

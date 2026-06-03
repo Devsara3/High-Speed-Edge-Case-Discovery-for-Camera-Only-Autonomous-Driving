@@ -84,11 +84,15 @@ def generate_mock_data():
     print("[SUCCESS] Verification用のモックデータ（重みCSV 1本 & 走行ログ 50本）を生成しました。")
 
 def main():
-    if not os.path.exists('optimized_weather_weights.csv') or not glob.glob('logs/trial_*.csv'):
+    log_files = glob.glob('logs/trial_*.csv')
+    if os.path.exists('results/experiment_log.csv'):
+        log_files.append('results/experiment_log.csv')
+        
+    if not os.path.exists('optimized_weather_weights.csv') or len(log_files) == 0:
         generate_mock_data()
+        log_files = glob.glob('logs/trial_*.csv')
         
     df_weights = pd.read_csv('optimized_weather_weights.csv')
-    log_files = glob.glob('logs/trial_*.csv')
     
     all_trials_summary = []
     all_timesteps_list = []
