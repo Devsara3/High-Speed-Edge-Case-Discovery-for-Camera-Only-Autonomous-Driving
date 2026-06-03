@@ -1,51 +1,51 @@
 # W-ADAPT: Weather-Adaptive Dynamic Sensor Fusion and High-Speed Edge-Case Discovery for Autonomous Driving
 
-悪天候（大雨・濃霧・日差し）下における自動運転システムの安全性を担保するため、マルチセンサーの信頼性を動的に調停し、システムが内包する臨界エッジケース（Critical Edge Cases）を高速に自動探索・特定するための評価パイプラインです。
+An evaluation pipeline designed to ensure the safety of autonomous driving systems under adverse weather conditions (heavy rain, dense fog, intense sunlight). It dynamically arbitrates the reliability of multiple sensors and rapidly automatically discovers and identifies Critical Edge Cases inherent in the system.
 
-## プロジェクトの概要と目的
-従来の自動運転システムは、豪雨や濃霧・日差しといった環境ノイズに対してセンサー単体の認識精度が著しく低下する課題がありました。本プロジェクトでは以下の4ステップアプローチにより、この課題を解決および定量化します。
+## Project Overview and Objectives
+Conventional autonomous driving systems suffer from a significant drop in single-sensor recognition accuracy due to environmental noise such as heavy rain, fog, and sunlight. This project resolves and quantifies this issue through the following 4-step approach:
 
-1. **シナリオ設定 (Phase 1)**: 自動運転システムの評価において重要視される5つの代表的なハザードシナリオをシミュレータ上に定義。
-2. **データ収集 (Phase 2)**: CARLAシミュレータ環境で多様な気象パラメータをサンプリングし、ハザードシナリオにおける走行ログを自動収集。
-3. **天候適応型動的重み付け (Phase 3)**: 各センサーの測定距離の誤差（メートル差）をベースに、天候ごとの正答率を最大化する加重線形結合（Late Fusion）の重みを数理最適化（SLSQP）により算出。
-4. **臨界エッジケース探索 (Phase 4)**: 最適化された距離を用いて「動的リスクスコア関数」を計算し、システム全体の危険度が最大化する最悪の気象ドメイン（エッジケース）を自動特定・視覚化。
-
----
-
-## センサー構成と役割
-本システムでは、単一のセンサーに依存しない頑健な知覚レイヤーを構築しています。
-
-- **RGBステレオカメラ (sensor.camera.rgb)**: 左右にオフセット配置（$$y = \pm0.27\text{m}$$）。解像度 1280x720、FOV 110度。メインの認識（YOLO3D）を担う主役センサー。
-- **予測AIモデル (dist_ai)**: 悪天候下の距離推定を補完する学習済みAIモデル。
-- **LiDAR (sensor.lidar.ray_cast)**: 32チャンネル、56000 pts/s。バウンディングボックス内の中央値から距離（dist_lidar）を算出。
-- **Radar (sensor.other.radar)**: 相対接近速度（v_approach）の計測。
-- **Depth & Segmentation カメラ**: 距離および物体クラスの絶対真値（Ground Truth）の取得用（バックグラウンドキュー処理）。
+1. **Scenario Definition (Phase 1)**: Defining five representative hazard scenarios commonly emphasized in autonomous driving system evaluations within the simulator.
+2. **Data Collection (Phase 2)**: Sampling diverse weather parameters in the CARLA simulator environment to automatically collect driving logs across hazard scenarios.
+3. **Weather-Adaptive Dynamic Weighting (Phase 3)**: Calculating weights for a weighted linear combination (Late Fusion) that maximizes the accuracy rate for each weather condition using mathematical optimization (SLSQP). This is based on the measurement distance error (in meters) of each sensor.
+4. **Critical Edge-Case Discovery (Phase 4)**: Utilizing the optimized distances to calculate a "Dynamic Risk Score Function" to automatically identify and visualize the worst-case weather domains (edge cases) that maximize the overall system hazard level.
 
 ---
 
-## 検証ハザードシナリオ
-40コマ（2秒）の加速・巡航フェーズ後、正面の指定猶予距離に以下のハザードアクターを動的に同期召喚（Dynamic Hazard Injection）します。
+## Sensor Configuration and Roles
+This system builds a robust perception layer that does not rely on a single sensor.
 
-- **シナリオA (CPNA)**: 歩行者の飛び出し（秒速4.5mでエゴの進路を横断）
-- **シナリオB (CCRb)**: 先行車の急ブレーキ（走行開始30コマ目にフル制動）
-- **シナリオC (CCFtap)**: 対向車線の急な右折割り込み（50コマ目にエゴの車線へ切り込み）
-- **シナリオD (AVOID)**: 静的障害物（前方にブレーキロックした停止車両を配置）
-- **シナリオE (RLI)**: 交差点での赤信号無視（進入時に側方からマスタングがフルアクセルで突入）
+- **RGB Stereo Camera (sensor.camera.rgb)**: Laterally offset configuration ($$y = \pm0.27\text{m}$$). Resolution 1280x720, FOV 110 degrees. The primary sensor responsible for main recognition (YOLO3D).
+- **Predictive AI Model (dist_ai)**: A pre-trained AI model to complement distance estimation under adverse weather conditions.
+- **LiDAR (sensor.lidar.ray_cast)**: 32 channels, 56000 pts/s. Calculates distance (`dist_lidar`) from the median value within bounding boxes.
+- **Radar (sensor.other.radar)**: Measures relative approach velocity (`v_approach`).
+- **Depth & Segmentation Cameras**: Used for acquiring Absolute Ground Truth for distance and object classes (processed as background queues).
 
 ---
 
-## ディレクトリ構造
+## Verification Hazard Scenarios
+Following a 40-frame (2 seconds) acceleration and cruising phase, the following hazard actors are dynamically and synchronously injected (Dynamic Hazard Injection) at specified clearance distances directly ahead.
+
+- **Scenario A (CPNA)**: Pedestrian crossing (crosses the ego vehicle's path at 4.5 m/s).
+- **Scenario B (CCRb)**: Leading vehicle sudden braking (full braking applied at the 30th frame).
+- **Scenario C (CCFtap)**: Opposing vehicle suddenly cutting in for a right turn (cuts into the ego lane at the 50th frame).
+- **Scenario D (AVOID)**: Static obstacle (a stationary vehicle with locked brakes is placed ahead).
+- **Scenario E (RLI)**: Red light running at an intersection (a Mustang rushes in from the side with full throttle upon intersection entry).
+
+---
+
+## Directory Structure
 
 ```text
 .
-├── archive/                       # 【閲覧専用】古いバックアップ・一時スクリプトの退避先
-└── W-ADAPT/                       # 最新の実験・解析環境（メインディレクトリ）
-    ├── run_camera_only_experiment.py # 実験ループ・センサー同期制御本体
-    ├── carla_optuna_optimizer.py     # Optunaを用いた天候自動サンプリング実行スクリプト
-    ├── risk_calculator.py            # リスク関数の計算モジュール
-    ├── evaluator.py                  # YOLO3DおよびAI距離予測評価器
-    ├── phase4_edge_case_discovery.py # 透明性確保型リスク計算＆最悪天候特定コア
-    ├── plot_results.py               # 論文用3D散布図・2Dヒートマップ自動プロット
-    ├── optimized_weather_weights.csv # Phase 3で出力された天候別最適化重みマップ
-    └── logs/                         # 走行ログ（trial_*.csv）の格納先
+├── archive/                       # [Read-Only] Backup for old/temporary scripts
+└── W-ADAPT/                       # Main directory for latest experiments and analysis
+    ├── run_camera_only_experiment.py # Main script for experimental loop & sensor synchronization
+    ├── carla_optuna_optimizer.py     # Script for automated weather sampling execution using Optuna
+    ├── risk_calculator.py            # Risk function calculation module
+    ├── evaluator.py                  # Evaluator for YOLO3D and AI distance predictions
+    ├── phase4_edge_case_discovery.py # Core for transparent risk calculation & worst-case weather identification
+    ├── plot_results.py               # Auto-plotter for 3D scatter & 2D heatmaps (for paper)
+    ├── optimized_weather_weights.csv # Optimized weather-specific weight map output from Phase 3
+    └── logs/                         # Storage for driving logs (trial_*.csv)
 ```
