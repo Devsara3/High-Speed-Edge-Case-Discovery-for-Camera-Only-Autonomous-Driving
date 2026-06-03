@@ -305,49 +305,20 @@ class CameraOnlyExperiment:
         radar_bp.set_attribute('sensor_tick', '0.0')
         self.radar = self.world.spawn_actor(radar_bp, camera_transform_left, attach_to=self.ego_vehicle)
         self.actors.append(self.radar)
-        
-        depth_bp = self.blueprint_library.find('sensor.camera.depth')
-        depth_bp.set_attribute('image_size_x', '1280')
-        depth_bp.set_attribute('image_size_y', '720')
-        depth_bp.set_attribute('fov', '110')
-        self.depth_cam = self.world.spawn_actor(depth_bp, camera_transform_left, attach_to=self.ego_vehicle)
-        self.actors.append(self.depth_cam)
-        
-        seg_bp = self.blueprint_library.find('sensor.camera.semantic_segmentation')
-        seg_bp.set_attribute('image_size_x', '1280')
-        seg_bp.set_attribute('image_size_y', '720')
-        seg_bp.set_attribute('fov', '110')
-        self.seg_cam = self.world.spawn_actor(seg_bp, camera_transform_left, attach_to=self.ego_vehicle)
-        self.actors.append(self.seg_cam)
 
         
         if not hasattr(self, 'lidar_queue'):
             self.lidar_queue = queue.Queue()
             self.radar_queue = queue.Queue()
-            self.depth_queue = queue.Queue()
-            self.seg_queue = queue.Queue()
             
         while not self.lidar_queue.empty(): self.lidar_queue.get()
         while not self.radar_queue.empty(): self.radar_queue.get()
-        while not self.depth_queue.empty(): self.depth_queue.get()
-        while not self.seg_queue.empty(): self.seg_queue.get()
         
         def _on_lidar(data): self.lidar_queue.put((data.frame, data))
         def _on_radar(data): self.radar_queue.put((data.frame, data))
-        def _on_depth(image):
-            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-            array = np.reshape(array, (image.height, image.width, 4))
-            self.depth_queue.put((image.frame, array))
-        def _on_seg(image):
-            image.convert(carla.ColorConverter.Raw) # Raw ID繧貞叙蠕・
-            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-            array = np.reshape(array, (image.height, image.width, 4))
-            self.seg_queue.put((image.frame, array))
-            
+        
         self.lidar.listen(_on_lidar)
         self.radar.listen(_on_radar)
-        self.depth_cam.listen(_on_depth)
-        self.seg_cam.listen(_on_seg)
         
         v_ego = ego_speed_kph / 3.6
         fwd = ego_transform.get_forward_vector()
@@ -750,8 +721,8 @@ class CameraOnlyExperiment:
             current_fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
             target_box = None
             if yolo_detections:
-                target_box = [int(yolo_detections[0]['ymin']), int(yolo_detections[0]['xmin']), 
-                              int(yolo_detections[0]['ymax']), int(yolo_detections[0]['xmax'])]
+                x1, y1, x2, y2 = yolo_detections[0]['bbox_2d']
+                target_box = [int(y1), int(x1), int(y2), int(x2)]
 
             dist_hsi = self.hsc_emulator.estimate_distance_from_image(image_left, current_fog, target_bbox=target_box)
             # ====================================================
