@@ -53,7 +53,7 @@ class SensorWeightOptimizer:
         optimized_w = valid_df.apply(self.optimize_weights_for_row, axis=1)
         
         # 教師データの作成
-        X = valid_df[['precipitation', 'fog', 'dist_camera', 'dist_lidar']].values
+        X = valid_df[['precipitation', 'fog', 'sun_altitude', 'dist_camera', 'dist_lidar']].values
         y = np.array(optimized_w.tolist())
         
         # ランダムフォレスト回帰でモデル化

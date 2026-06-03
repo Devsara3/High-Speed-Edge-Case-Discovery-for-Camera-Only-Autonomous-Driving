@@ -41,13 +41,16 @@ def generate_mock_data():
     weights_data = []
     for p in range(0, 101, 10):
         for f in range(0, 101, 10):
-            w_ai = (p + f) / 200.0 if (p + f) > 0 else 0.25
-            remaining = 1.0 - w_ai
-            weights_data.append({
-                'precipitation': float(p), 'fog': float(f),
-                'w_lidar': remaining * 0.5, 'w_stereo': remaining * 0.3,
-                'w_camera': remaining * 0.2, 'w_ai': w_ai
-            })
+            for s in range(-90, 91, 15):
+                w_ai = (p + f) / 200.0 if (p + f) > 0 else 0.25
+                if -30 <= s <= 30: # 日差しが強いときはLiDAR等への依存を増やすモック
+                    w_ai = min(w_ai + 0.1, 0.9)
+                remaining = 1.0 - w_ai
+                weights_data.append({
+                    'precipitation': float(p), 'fog': float(f), 'sun_altitude': float(s),
+                    'w_lidar': remaining * 0.5, 'w_stereo': remaining * 0.3,
+                    'w_camera': remaining * 0.2, 'w_ai': w_ai
+                })
     pd.DataFrame(weights_data).to_csv('optimized_weather_weights.csv', index=False)
     
     # 2. Phase 2 のダミー走行ログ（50回分）の作成
@@ -103,11 +106,12 @@ def main():
         
         df_log['precip_grid'] = np.round(df_log['precipitation'] / 10.0) * 10.0
         df_log['fog_grid'] = np.round(df_log['fog'] / 10.0) * 10.0
+        df_log['sun_grid'] = np.round(df_log['sun_altitude'] / 15.0) * 15.0
         
         df_merged = pd.merge(
             df_log, df_weights, 
-            left_on=['precip_grid', 'fog_grid'], 
-            right_on=['precipitation', 'fog'], 
+            left_on=['precip_grid', 'fog_grid', 'sun_grid'], 
+            right_on=['precipitation', 'fog', 'sun_altitude'], 
             suffixes=('', '_w')
         )
         
