@@ -25,7 +25,7 @@ except ImportError:
 class CameraOnlyExperiment:
     """
     繧ｫ繝｡繝ｩ蜊倅ｸ€繧ｻ繝ｳ繧ｵ繝ｼ・・amera-Only・峨↓繧医ｋ讓呎ｺ泡DAS繧ｷ繝翫Μ繧ｪ螳滄ｨ楢ｵｰ陦檎ｮ｡逅・け繝ｩ繧ｹ縲・    螳滓ｩ櫃ARLA縺翫ｈ縺ｳ繧ｪ繝輔Λ繧､繝ｳ繝｢繝・け・・-demo・峨・荳｡譁ｹ繧偵し繝昴・繝医＠縺ｾ縺吶€・    """
-    def __init__(self, demo_mode=True, host='localhost', port=2000, record_video=False):
+    def __init__(self, demo_mode=True, host='localhost', port=2000, record_video=False, run_id=None):
         self.demo_mode = demo_mode or not CARLA_AVAILABLE
         self.record_video = record_video
         self.video_frames = []
@@ -36,6 +36,8 @@ class CameraOnlyExperiment:
         self.actors = []
         self.training_data = []
         self.log_data = []
+        
+        self.run_id = run_id if run_id else time.strftime("%Y%m%d_%H%M%S")
         
         # HUD蜍慕判菫晏ｭ倡畑
         os.makedirs('results', exist_ok=True)
@@ -1444,7 +1446,9 @@ class CameraOnlyExperiment:
     def get_worst_case_image(self):
         return getattr(self, 'worst_case_image', None)
 
-    def export_training_data(self, filepath="results/distance_training_data.csv"):
+    def export_training_data(self, filepath=None):
+        if filepath is None:
+            filepath = f"results/distance_training_data_{self.run_id}.csv"
         if not self.training_data:
             return
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -1453,7 +1457,9 @@ class CameraOnlyExperiment:
         df.to_csv(filepath, mode='a', header=not os.path.exists(filepath), index=False)
         print(f"[SUCCESS] Appended {len(df)} distance training samples to {filepath}")
 
-    def export_log_data(self, filepath="results/experiment_log.csv"):
+    def export_log_data(self, filepath=None):
+        if filepath is None:
+            filepath = f"results/experiment_log_{self.run_id}.csv"
         if not self.log_data:
             return
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
