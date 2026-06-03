@@ -756,18 +756,20 @@ class CameraOnlyExperiment:
             
             # --- HSC ---
             current_fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
-            target_box = None
-            if yolo_detections and 'bbox_2d' in yolo_detections[0]:
-                x1, y1, x2, y2 = yolo_detections[0]['bbox_2d']
-                target_box = [int(y1), int(x1), int(y2), int(x2)]
-            elif yolo_detections and 'bbox' in yolo_detections[0]:
-                x1, y1, x2, y2 = yolo_detections[0]['bbox']
-                target_box = [int(y1), int(x1), int(y2), int(x2)]
+            
+            # ハザードとの正確な物理直線距離の取得
+            if hasattr(self, 'target_actor') and self.target_actor and self.target_actor.is_alive:
+                dist_gt_hsc = self.ego_vehicle.get_transform().location.distance(self.target_actor.get_transform().location)
+            else:
+                dist_gt_hsc = -1.0  # 未出現時
 
+            # ====================================================
+            # 🔥 【HSC完全統合】物理透過シミュレーションモデルの実行
+            # ====================================================
             dist_hsi = float('inf')
             if hasattr(self, 'hsc_emulator'):
-                dist_hsi = self.hsc_emulator.estimate_distance_from_image(image_left, current_fog, target_bbox=target_box)
-                
+                dist_hsi = self.hsc_emulator.estimate_distance_from_image(current_fog, dist_gt_hsc)
+            # ==================================================
             image = image_left.copy() if image_left is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
             
             gt_obstacles = []
