@@ -34,8 +34,8 @@ def plot_3d_scatter(df):
     cbar = fig.colorbar(sc, ax=ax, shrink=0.6, pad=0.1)
     cbar.set_label('Maximum Risk Score $R(t)$', fontsize=11)
     
-    plt.savefig('new/figure1_3d_weather_risk_scatter.png', dpi=300, bbox_inches='tight')
-    print("[SUCCESS] 図1 (3D散布図): 'new/figure1_3d_weather_risk_scatter.png' を保存しました。")
+    plt.savefig('figure1_3d_weather_risk_scatter.png', dpi=300, bbox_inches='tight')
+    print("[SUCCESS] 図1 (3D散布図): 'figure1_3d_weather_risk_scatter.png' を保存しました。")
     plt.close()
 
 def plot_2d_heatmap(df):
@@ -81,12 +81,12 @@ def plot_2d_heatmap(df):
     cbar.set_label('Peak Risk Score $R(t)$', fontsize=12)
     plt.grid(False)
     
-    plt.savefig('new/figure2_2d_weather_risk_heatmap.png', dpi=300, bbox_inches='tight')
-    print("[SUCCESS] 図2 (2Dヒートマップ): 'new/figure2_2d_weather_risk_heatmap.png' を保存しました。")
+    plt.savefig('figure2_2d_weather_risk_heatmap.png', dpi=300, bbox_inches='tight')
+    print("[SUCCESS] 図2 (2Dヒートマップ): 'figure2_2d_weather_risk_heatmap.png' を保存しました。")
     plt.close()
 
 def main():
-    csv_path = 'new/fused_risk_timeseries.csv'
+    csv_path = 'fused_risk_timeseries.csv'
     if not os.path.exists(csv_path):
         print(f"[ERROR] {csv_path} が存在しません。先に phase4_edge_case_discovery.py を実行してください。")
         return

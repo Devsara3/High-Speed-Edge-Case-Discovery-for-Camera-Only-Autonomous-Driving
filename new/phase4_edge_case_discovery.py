@@ -35,7 +35,7 @@ def generate_mock_data():
     """
     Verification Plan に基づくモックデータの自動生成
     """
-    os.makedirs('new/logs', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
     
     # 1. Phase 3 のダミー重みデータ作成
     weights_data = []
@@ -48,7 +48,7 @@ def generate_mock_data():
                 'w_lidar': remaining * 0.5, 'w_stereo': remaining * 0.3,
                 'w_camera': remaining * 0.2, 'w_ai': w_ai
             })
-    pd.DataFrame(weights_data).to_csv('new/optimized_weather_weights.csv', index=False)
+    pd.DataFrame(weights_data).to_csv('optimized_weather_weights.csv', index=False)
     
     # 2. Phase 2 のダミー走行ログ（50回分）の作成
     scenarios = ['A', 'B', 'C', 'D', 'E']
@@ -80,15 +80,15 @@ def generate_mock_data():
             df_trial['v_approach'] *= 2.5
             df_trial['dist_stereo'] += 15.0 
             
-        df_trial.to_csv(f'new/logs/trial_{i:03d}.csv', index=False)
+        df_trial.to_csv(f'logs/trial_{i:03d}.csv', index=False)
     print("[SUCCESS] Verification用のモックデータ（重みCSV 1本 & 走行ログ 50本）を生成しました。")
 
 def main():
-    if not os.path.exists('new/optimized_weather_weights.csv') or not glob.glob('new/logs/trial_*.csv'):
+    if not os.path.exists('optimized_weather_weights.csv') or not glob.glob('logs/trial_*.csv'):
         generate_mock_data()
         
-    df_weights = pd.read_csv('new/optimized_weather_weights.csv')
-    log_files = glob.glob('new/logs/trial_*.csv')
+    df_weights = pd.read_csv('optimized_weather_weights.csv')
+    log_files = glob.glob('logs/trial_*.csv')
     
     all_trials_summary = []
     all_timesteps_list = []
@@ -141,7 +141,7 @@ def main():
     existing_cols = [col for col in output_columns if col in df_final_archive.columns]
     
     # plot_results.py が読み込むファイル名に上書き
-    output_csv_path = 'new/fused_risk_timeseries.csv'
+    output_csv_path = 'fused_risk_timeseries.csv'
     df_final_archive[existing_cols].to_csv(output_csv_path, index=False)
     print(f"\n[SUCCESS] リスク計算の透明性を検証するための全ログを {output_csv_path} に保存しました！")
     
