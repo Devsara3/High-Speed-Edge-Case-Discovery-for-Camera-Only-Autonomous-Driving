@@ -1282,7 +1282,7 @@ class CameraOnlyExperiment:
             bp_list = self.blueprint_library.filter('walker.pedestrian.0001')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('walker.*')[0]
             loc = ego_loc + forward * spawn_dist - right * 3.5
-            loc.z += 0.5
+            loc.z += 2.0
             rot = carla.Rotation(yaw=ego_transform.rotation.yaw + 90.0)
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
@@ -1297,7 +1297,7 @@ class CameraOnlyExperiment:
         elif seq == 'B':
             bp = self.blueprint_library.filter('model3')[0]
             loc = ego_loc + forward * spawn_dist
-            loc.z += 0.5
+            loc.z += 2.0
             rot = ego_transform.rotation
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
@@ -1309,7 +1309,7 @@ class CameraOnlyExperiment:
         elif seq == 'C':
             bp = self.blueprint_library.filter('model3')[0]
             loc = ego_loc + forward * spawn_dist + right * 3.5
-            loc.z += 0.5
+            loc.z += 2.0
             rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw + 180.0, roll=0.0)
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
@@ -1322,7 +1322,7 @@ class CameraOnlyExperiment:
         elif seq == 'D':
             bp = self.blueprint_library.filter('vehicle.toyota.prius')[0]
             loc = ego_loc + forward * spawn_dist
-            loc.z += 0.5
+            loc.z += 2.0
             rot = ego_transform.rotation
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
@@ -1338,7 +1338,7 @@ class CameraOnlyExperiment:
             bp_list = self.blueprint_library.filter('vehicle.ford.mustang')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('vehicle.*')[0]
             loc = ego_loc + forward * spawn_dist + right * 15.0
-            loc.z += 0.5
+            loc.z += 2.0
             rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw - 90.0, roll=0.0)
             target_transform = carla.Transform(loc, rot)
             self.target_actor = self.world.try_spawn_actor(bp, target_transform)
@@ -1427,7 +1427,9 @@ class CameraOnlyExperiment:
                             import carla
                             ego_tf = self.ego_vehicle.get_transform()
                             forward_vector = ego_tf.get_forward_vector()
-                            car_transform = carla.Transform(ego_tf.location + forward_vector * 30.0, ego_tf.rotation)
+                            car_loc = ego_tf.location + forward_vector * 30.0
+                            car_loc.z += 2.0
+                            car_transform = carla.Transform(car_loc, ego_tf.rotation)
                             bp = self.blueprint_library.filter('vehicle.tesla.model3')[0]
                             self.target_actor = self.world.try_spawn_actor(bp, car_transform)
                             if self.target_actor:
