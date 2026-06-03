@@ -877,7 +877,8 @@ class CameraOnlyExperiment:
                 target_loc += right_vec * offset_y
                 
             # 逶ｮ讓吝ｺｧ讓吶ｒ閾ｪ霆翫・繝ｭ繝ｼ繧ｫ繝ｫ蠎ｧ讓咏ｳｻ縺ｫ謚募ｽｱ
-            # 謇句勘隶｡邂礼岼譬・せ蝨ｨ閾ｪ霓ｦ螻驛ｨ蝮先・ｳｻ逧・攝譬・ｼ域崛莉｣ get_inverse().transform()・・            dx = target_loc.x - ego_transform.location.x
+            # 手动计算目标在自车局部坐标系中的坐标（替代 get_inverse().transform()）
+            dx = target_loc.x - ego_transform.location.x
             dy = target_loc.y - ego_transform.location.y
             dz = target_loc.z - ego_transform.location.z
             fwd = ego_transform.get_forward_vector()
