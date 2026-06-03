@@ -9,8 +9,6 @@ import os
 import time
 import pandas as pd
 import optuna
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run_camera_only_experiment import CameraOnlyExperiment
 
 def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', demo_mode=True, mode='exploit', record_video=False):
