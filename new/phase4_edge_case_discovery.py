@@ -157,7 +157,7 @@ def main():
     sun_max = sun_min + 5.0
     
     print("\n======================================================================================")
-    print("                      📊 PHASE 4: CRITICAL EDGE CASE REPORT                           ")
+    print("                      [PHASE 4] CRITICAL EDGE CASE REPORT                             ")
     print("======================================================================================")
     print(f"降水量: [ {worst_case['precipitation']:.1f}% ] 以上、霧（FOG）: [ {worst_case['fog']:.1f}% ] 以上、")
     print(f"日射角（SUN_ALTITUDE）: [ {sun_min:.1f}度 〜 {sun_max:.1f}度 ] のドメインにおいて、")
