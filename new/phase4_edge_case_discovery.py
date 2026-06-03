@@ -152,18 +152,24 @@ def main():
     else:
         print("（※マイナスのv_approachデータはありませんでした）")
     
-    worst_case = df_summary.sort_values(by='max_risk_score', ascending=False).iloc[0]
-    sun_min = np.floor(worst_case['sun_altitude'] / 5.0) * 5.0
-    sun_max = sun_min + 5.0
-    
     print("\n======================================================================================")
-    print("                      [PHASE 4] CRITICAL EDGE CASE REPORT                             ")
+    print("                 [PHASE 4] CRITICAL EDGE CASE REPORT (PER SCENARIO)                   ")
     print("======================================================================================")
-    print(f"降水量: [ {worst_case['precipitation']:.1f}% ] 以上、霧（FOG）: [ {worst_case['fog']:.1f}% ] 以上、")
-    print(f"日射角（SUN_ALTITUDE）: [ {sun_min:.1f}度 〜 {sun_max:.1f}度 ] のドメインにおいて、")
-    print(f"システム全体の危険度が最大値（Max Risk Score: {worst_case['max_risk_score']:.2f}）に達した。")
-    print(f"※対象となった最悪のハザードシナリオ型: シナリオ {worst_case['scenario_type']}")
-    print("======================================================================================\n")
+    
+    scenarios_found = sorted(df_summary['scenario_type'].unique())
+    
+    for scen in scenarios_found:
+        df_scen = df_summary[df_summary['scenario_type'] == scen]
+        worst_case = df_scen.sort_values(by='max_risk_score', ascending=False).iloc[0]
+        sun_min = np.floor(worst_case['sun_altitude'] / 5.0) * 5.0
+        sun_max = sun_min + 5.0
+        
+        print(f"【シナリオ {scen} の最悪エッジケース】")
+        print(f"  - 降水量: [ {worst_case['precipitation']:.1f}% ] 以上、霧（FOG）: [ {worst_case['fog']:.1f}% ] 以上")
+        print(f"  - 日射角: [ {sun_min:.1f}度 〜 {sun_max:.1f}度 ]")
+        print(f"  - Max Risk Score: {worst_case['max_risk_score']:.2f}")
+        print("-" * 86)
+    print()
 
 if __name__ == '__main__':
     main()
