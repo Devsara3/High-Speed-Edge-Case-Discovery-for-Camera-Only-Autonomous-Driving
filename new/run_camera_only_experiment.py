@@ -3,6 +3,7 @@ import sys
 import time
 import argparse
 import numpy as np
+from hsc_emulator import HSCEmulator
 import cv2
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -654,8 +655,6 @@ class CameraOnlyExperiment:
                     sensor_frame_r, bgr_img_r = self.image_queue_right.get(timeout=0.1)
                     sensor_frame_lidar, l_data = self.lidar_queue.get(timeout=0.1)
                     sensor_frame_radar, r_data = self.radar_queue.get(timeout=0.1)
-                    sensor_frame_depth, d_img = self.depth_queue.get(timeout=0.1)
-                    sensor_frame_seg, s_img = self.seg_queue.get(timeout=0.1)
                     
                     frames = [sensor_frame_l, sensor_frame_r, sensor_frame_lidar, sensor_frame_radar, sensor_frame_depth, sensor_frame_seg]
 
@@ -745,6 +744,18 @@ class CameraOnlyExperiment:
                         self.target_actor.apply_control(control)
             
             yolo_detections = self.evaluator.evaluate_multi(image_left, image_right=image_right, ego_speed=ego_vel[0])
+            # ====================================================
+            # 🔥 【真のHSC統合】GTを一切使わず、RGB画像とYOLOのBBox（または中央領域）から距離を復元
+            # ====================================================
+            current_fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
+            target_box = None
+            if yolo_detections:
+                target_box = [int(yolo_detections[0]['ymin']), int(yolo_detections[0]['xmin']), 
+                              int(yolo_detections[0]['ymax']), int(yolo_detections[0]['xmax'])]
+
+            dist_hsi = self.hsc_emulator.estimate_distance_from_image(image_left, current_fog, target_bbox=target_box)
+            # ====================================================
+
             image = image_left.copy() if image_left is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
             
             gt_obstacles = []
@@ -965,7 +976,7 @@ class CameraOnlyExperiment:
                     global_dist_lidar = lidar_d
                     global_dist_camera = stereo_d
                     global_dist_stereo = actual_stereo
-                    global_dist_ai = actual_ai
+                    global_dist_ai = dist_hsi
                     
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
