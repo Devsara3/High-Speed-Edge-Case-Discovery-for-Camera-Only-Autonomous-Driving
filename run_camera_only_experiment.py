@@ -1264,6 +1264,33 @@ class CameraOnlyExperiment:
         if not self.demo_mode:
             self._destroy_actors()
 
+    def _safe_spawn_actor(self, bp, target_loc, rot, forward_vector):
+        import carla
+        loc = carla.Location(target_loc.x, target_loc.y, target_loc.z)
+        
+        for i in range(5):
+            ray_start = loc + carla.Location(z=1.0)
+            ray_end = loc - carla.Location(z=1.0)
+            labeled_objects = self.world.cast_ray(ray_start, ray_end)
+            
+            actor = None
+            if len(labeled_objects) == 0:
+                actor = self.world.try_spawn_actor(bp, carla.Transform(loc, rot))
+                
+            if actor is not None:
+                return actor
+                
+            print(f"⚠️ Obstacle detected at spawn location. Adjusting backward... (Attempt {i+1}/5)")
+            loc -= forward_vector * 1.5
+            
+        print("⚠️ All spawn attempts failed. Using fallback to road center.")
+        wp = self.world.get_map().get_waypoint(target_loc)
+        if wp:
+            fallback_loc = wp.transform.location
+            fallback_loc.z += 1.0
+            return self.world.try_spawn_actor(bp, carla.Transform(fallback_loc, rot))
+        return None
+
     def _inject_dynamic_hazard(self, seq, spawn_dist):
         if self.demo_mode:
             return
@@ -1274,18 +1301,21 @@ class CameraOnlyExperiment:
             return
             
         ego_transform = self.ego_vehicle.get_transform()
-        forward = ego_transform.get_forward_vector()
-        right = ego_transform.get_right_vector()
-        ego_loc = ego_transform.location
+        wp = self.world.get_map().get_waypoint(ego_transform.location)
+        target_wps = wp.next(spawn_dist)
+        target_wp = target_wps[0] if target_wps else wp
+        
+        base_loc = target_wp.transform.location
+        forward = target_wp.transform.get_forward_vector()
+        right = target_wp.transform.get_right_vector()
 
         if seq == 'A':
             bp_list = self.blueprint_library.filter('walker.pedestrian.0001')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('walker.*')[0]
-            loc = ego_loc + forward * spawn_dist - right * 3.5
+            loc = base_loc - right * 3.5
             loc.z += 1.0
-            rot = carla.Rotation(yaw=ego_transform.rotation.yaw + 90.0)
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            rot = carla.Rotation(yaw=target_wp.transform.rotation.yaw + 90.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1296,11 +1326,10 @@ class CameraOnlyExperiment:
                 
         elif seq == 'B':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = ego_loc + forward * spawn_dist
+            loc = base_loc
             loc.z += 1.0
-            rot = ego_transform.rotation
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            rot = target_wp.transform.rotation
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1308,11 +1337,10 @@ class CameraOnlyExperiment:
                 
         elif seq == 'C':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = ego_loc + forward * spawn_dist + right * 3.5
+            loc = base_loc + right * 3.5
             loc.z += 1.0
-            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw + 180.0, roll=0.0)
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            rot = carla.Rotation(pitch=0.0, yaw=target_wp.transform.rotation.yaw + 180.0, roll=0.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1322,11 +1350,10 @@ class CameraOnlyExperiment:
         elif seq == 'D':
             bp_list = self.blueprint_library.filter('static.prop.constructioncone')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('static.prop.*')[0]
-            loc = ego_loc + forward * spawn_dist
+            loc = base_loc
             loc.z += 1.0
-            rot = ego_transform.rotation
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            rot = target_wp.transform.rotation
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1334,11 +1361,10 @@ class CameraOnlyExperiment:
         elif seq == 'E':
             bp_list = self.blueprint_library.filter('vehicle.ford.mustang')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('vehicle.*')[0]
-            loc = ego_loc + forward * spawn_dist + right * 15.0
+            loc = base_loc + right * 15.0
             loc.z += 1.0
-            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw - 90.0, roll=0.0)
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            rot = carla.Rotation(pitch=0.0, yaw=target_wp.transform.rotation.yaw - 90.0, roll=0.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1423,12 +1449,16 @@ class CameraOnlyExperiment:
                         try:
                             import carla
                             ego_tf = self.ego_vehicle.get_transform()
-                            forward_vector = ego_tf.get_forward_vector()
-                            car_loc = ego_tf.location + forward_vector * 30.0
+                            wp = self.world.get_map().get_waypoint(ego_tf.location)
+                            target_wps = wp.next(30.0)
+                            target_wp = target_wps[0] if target_wps else wp
+                            
+                            car_loc = target_wp.transform.location
                             car_loc.z += 1.0
-                            car_transform = carla.Transform(car_loc, ego_tf.rotation)
+                            forward = target_wp.transform.get_forward_vector()
+                            
                             bp = self.blueprint_library.filter('vehicle.tesla.model3')[0]
-                            self.target_actor = self.world.try_spawn_actor(bp, car_transform)
+                            self.target_actor = self._safe_spawn_actor(bp, car_loc, target_wp.transform.rotation, forward)
                             if self.target_actor:
                                 self.actors.append(self.target_actor)
                                 self.target_actor.set_autopilot(False)
