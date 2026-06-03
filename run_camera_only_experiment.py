@@ -45,6 +45,9 @@ class CameraOnlyExperiment:
         self.video_writer = cv2.VideoWriter('results/sensor_record.mp4', fourcc, 20.0, (1280, 720))
         self.current_scenario = None
         self.clear_flag = False
+        self.lead_decel_ticks = float('inf')
+        self.lead_decel_started = False
+        self.lead_deceleration = -6.0
         
         self.scenario_min_distance = float('inf')
         self.scenario_collisions = 0
@@ -206,33 +209,27 @@ class CameraOnlyExperiment:
         ego_transform = spawn_points[0]
         target_tl = None
         
-        # Scenario E 縺ｮ蝣ｴ蜷医€∽ｺ句燕縺ｫ菫｡蜿ｷ讖溘′縺ゅｋ莠､蟾ｮ轤ｹ縺ｮ謇句燕縺ｮ繧ｹ繝昴・繝ｳ繝昴う繝ｳ繝医ｒ謗｢縺・
-        if name == 'E':
-            best_spawn = spawn_points[0]
-            for sp in spawn_points:
-                wp = self.world.get_map().get_waypoint(sp.location)
-                found = False
-                for _ in range(20): # 譛€螟ｧ40m蜑肴婿繧呈爾邏｢
-                    next_wps = wp.next(2.0)
-
-                    if not next_wps:
+        # Find a spawn point with a traffic light within 40m ahead (all scenarios)
+        best_spawn = spawn_points[0]
+        for sp in spawn_points:
+            wp = self.world.get_map().get_waypoint(sp.location)
+            found = False
+            for _ in range(20):  # walk 40m ahead
+                next_wps = wp.next(2.0)
+                if not next_wps:
+                    break
+                wp = next_wps[0]
+                for tl in self.world.get_actors().filter('traffic.traffic_light'):
+                    if tl.get_location().distance(wp.transform.location) < 15.0:
+                        best_spawn = sp
+                        target_tl = tl
+                        found = True
                         break
-                    wp = next_wps[0]
-                    # 蜑肴婿縺ｮwaypoint蜻ｨ霎ｺ(15m莉･蜀・縺ｫ菫｡蜿ｷ讖溘′縺ゅｋ縺九メ繧ｧ繝・け
-                    for tl in self.world.get_actors().filter('traffic.traffic_light'):
-
-                        if tl.get_location().distance(wp.transform.location) < 15.0:
-                            best_spawn = sp
-                            target_tl = tl
-                            found = True
-                            break
-
-                    if found:
-                        break
-
                 if found:
                     break
-            ego_transform = best_spawn
+            if found:
+                break
+        ego_transform = best_spawn
         
         # 1. 閾ｪ霆翫・繧ｹ繝昴・繝ｳ
         ego_bp = self.blueprint_library.filter('model3')[0]
@@ -718,22 +715,19 @@ class CameraOnlyExperiment:
 
             
             if scenario_name == 'A':
-
-                if travel_dist >= self.trigger_dist:
+                if self.target_actor is not None and travel_dist >= self.trigger_dist:
                     ped_control = carla.WalkerControl()
                     ped_control.direction = ego_transform.get_right_vector()
                     ped_control.speed = 1.39
                     self.target_actor.apply_control(ped_control)
             elif scenario_name == 'B':
-
-                if self.scenario_ticks >= self.lead_decel_ticks:
-                    self.lead_decel_started = True
-
-                
-                if self.lead_decel_started:
-                    v_lead = self.target_actor.get_velocity()
-                    new_vx = max(0.0, v_lead.x + self.lead_deceleration * dt)
-                    self.target_actor.set_target_velocity(carla.Vector3D(new_vx, v_lead.y, v_lead.z))
+                if self.target_actor is not None:
+                    if self.scenario_ticks >= self.lead_decel_ticks:
+                        self.lead_decel_started = True
+                    if self.lead_decel_started:
+                        v_lead = self.target_actor.get_velocity()
+                        new_vx = max(0.0, v_lead.x + self.lead_deceleration * dt)
+                        self.target_actor.set_target_velocity(carla.Vector3D(new_vx, v_lead.y, v_lead.z))
                     
             elif scenario_name == 'C':
 
@@ -1432,6 +1426,12 @@ class CameraOnlyExperiment:
                             if self.target_actor:
                                 self.actors.append(self.target_actor)
                                 self.target_actor.set_autopilot(False)
+                                # Phase 2: lead vehicle emergency brake (Scenario B)
+                                self.lead_decel_ticks = 0
+                                self.lead_decel_started = True
+                                self.lead_deceleration = -9.0  # emergency brake
+                                seq = 'B'
+                                self.current_scenario = 'B'
                                 scenario_phase = 2
                         except Exception as e:
                             print(f"Spawn Error at Phase 2: {e}")
