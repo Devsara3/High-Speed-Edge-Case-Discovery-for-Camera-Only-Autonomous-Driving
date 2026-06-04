@@ -216,37 +216,12 @@ class CameraOnlyExperiment:
         self.worst_case_image = None
         self.worst_case_step = 0
         
-        spawn_points = self.world.get_map().get_spawn_points()
-        ego_transform = spawn_points[0]
+        import carla
         target_tl = None
-        
-        # Find a spawn point with traffic light ahead, AND 30m forward is on-road
-        best_spawn = spawn_points[0]
-        for sp in spawn_points:
-            sp_wp = self.world.get_map().get_waypoint(sp.location)
-            # Check if 30m ahead exists on road
-            fwd_wps = sp_wp.next(30.0)
-            if not fwd_wps:
-                continue
-            # Check if traffic light within 40m
-            found_tl = False
-            wp = sp_wp
-            for _ in range(20):
-                next_wps = wp.next(2.0)
-                if not next_wps:
-                    break
-                wp = next_wps[0]
-                for tl in self.world.get_actors().filter('traffic.traffic_light'):
-                    if tl.get_location().distance(wp.transform.location) < 15.0:
-                        target_tl = tl
-                        found_tl = True
-                        break
-                if found_tl:
-                    break
-            if found_tl:
-                best_spawn = sp
-                break
-        ego_transform = best_spawn
+        ego_transform = carla.Transform(
+            carla.Location(x=-3.10, y=-183.51, z=0.78),
+            carla.Rotation(pitch=0.0, yaw=91.4, roll=0.0)
+        )
         
         # 1. 閾ｪ霆翫・繧ｹ繝昴・繝ｳ
         ego_bp = self.blueprint_library.filter('model3')[0]
