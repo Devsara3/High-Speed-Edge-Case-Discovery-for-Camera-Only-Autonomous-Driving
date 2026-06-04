@@ -220,25 +220,31 @@ class CameraOnlyExperiment:
         ego_transform = spawn_points[0]
         target_tl = None
         
-        # Find a spawn point with a traffic light within 40m ahead (all scenarios)
+        # Find a spawn point with traffic light ahead, AND 30m forward is on-road
         best_spawn = spawn_points[0]
         for sp in spawn_points:
-            wp = self.world.get_map().get_waypoint(sp.location)
-            found = False
-            for _ in range(20):  # walk 40m ahead
+            sp_wp = self.world.get_map().get_waypoint(sp.location)
+            # Check if 30m ahead exists on road
+            fwd_wps = sp_wp.next(30.0)
+            if not fwd_wps:
+                continue
+            # Check if traffic light within 40m
+            found_tl = False
+            wp = sp_wp
+            for _ in range(20):
                 next_wps = wp.next(2.0)
                 if not next_wps:
                     break
                 wp = next_wps[0]
                 for tl in self.world.get_actors().filter('traffic.traffic_light'):
                     if tl.get_location().distance(wp.transform.location) < 15.0:
-                        best_spawn = sp
                         target_tl = tl
-                        found = True
+                        found_tl = True
                         break
-                if found:
+                if found_tl:
                     break
-            if found:
+            if found_tl:
+                best_spawn = sp
                 break
         ego_transform = best_spawn
         
@@ -1245,32 +1251,8 @@ class CameraOnlyExperiment:
         return {}
 
     def run_experiment(self, scenario_name, target_speed_kph=40.0, gap=12.0, deceleration=-6.0, max_ticks=200):
-        """
-        謖・ｮ壹＆繧後◆蜊倅ｸ繧ｷ繝翫Μ繧ｪ繧貞ｮ溯｡後・        """
-        print(f"\n===== Starting Scenario {scenario_name} =====")
-
-        if self.demo_mode:
-            self._setup_mock_scenario(scenario_name, target_speed_kph, gap, deceleration)
-        else:
-            self._setup_real_scenario(scenario_name, target_speed_kph, gap, deceleration)
-            
-        for tick in range(max_ticks):
-            log = self.run_step(scenario_name, target_speed_kph)
-
-            
-            if tick % 10 == 0:
-                print(f"Step {log['scenario_ticks']}: Ego X={log['ego_x']:.1f}m, Y={log['ego_y']:.2f}m, Vx={log['ego_vx']*3.6:.1f}km/h | worst={log['worst_obstacle']} | Gap={log['perception_gap']:.2f} (GT={log['r_gt']:.2f}, Perc={log['r_perceived']:.2f}) | mu_perc={log['mu_perceived']:.1f}, mu_gt={log['mu_gt']:.1f}")
-
-                
-            if self.clear_flag:
-                print(f"--> Scenario {scenario_name} CLEARED at Step {tick}!")
-                break
-
-        self._save_worst_image(scenario_name)
-
-
-        if not self.demo_mode:
-            self._destroy_actors()
+        """Run a single scenario using the same multi-phase logic as run_sequence."""
+        self.run_sequence(single_scenario=scenario_name)
 
     def _safe_spawn_actor(self, bp, target_loc, rot, forward_vector):
         import carla
@@ -1409,15 +1391,18 @@ class CameraOnlyExperiment:
                 control.throttle = 1.0
                 self.target_actor.apply_control(control)
 
-    def run_sequence(self):
+    def run_sequence(self, single_scenario=None):
         global _scenario_cycle
         import random
         import numpy as np
         target_speed_kph = 40.0
         consecutive_stopped_ticks = 0
 
-        seq = _SCENARIOS[_scenario_cycle % 5]
-        _scenario_cycle += 1
+        if single_scenario:
+            seq = single_scenario
+        else:
+            seq = _SCENARIOS[_scenario_cycle % 5]
+            _scenario_cycle += 1
         spawn_dist = random.uniform(30.0, 40.0)
 
         if self.demo_mode:
