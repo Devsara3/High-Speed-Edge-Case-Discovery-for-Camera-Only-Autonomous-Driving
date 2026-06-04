@@ -247,8 +247,9 @@ class CameraOnlyExperiment:
         ego_transform.location.z += 0.5
         self.ego_vehicle = self.world.spawn_actor(ego_bp, ego_transform)
         self.actors.append(self.ego_vehicle)
+        print(f"[SPAWN] Ego Vehicle: x={ego_transform.location.x:.2f} y={ego_transform.location.y:.2f} z={ego_transform.location.z:.2f} yaw={ego_transform.rotation.yaw:.1f}deg")
         
-        # 髢句ｧ倶ｽ咲ｽｮ縺ｮ險倬鹸
+        # Store start location
         self.scenario_start_loc = ego_transform.location
         self.scenario_start_x = ego_transform.location.x
         
