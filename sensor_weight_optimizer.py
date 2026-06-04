@@ -17,22 +17,24 @@ class SensorWeightOptimizer:
     def optimize_weights_for_row(self, row):
         """1ステップ（1行）における理想の重みをScipyで逆算"""
         d_gt = row['dist_gt']
-        d_ai = row['dist_ai']
-        d_stereo = row['dist_camera'] # CSVでは dist_camera として保存されています
         d_lidar = row['dist_lidar']
+        d_stereo = row['dist_stereo']
+        d_camera = row['dist_camera']
+        d_ai = row['dist_ai']
+        d_hsi = row['dist_hsi']
         
         # 目的関数: 二乗誤差 (RMSEのベース)
         def loss_fn(weights):
-            w_ai, w_stereo, w_lidar = weights
-            d_fusion = (w_ai * d_ai) + (w_stereo * d_stereo) + (w_lidar * d_lidar)
+            w_lidar, w_stereo, w_camera, w_ai, w_hsi = weights
+            d_fusion = (w_lidar * d_lidar) + (w_stereo * d_stereo) + (w_camera * d_camera) + (w_ai * d_ai) + (w_hsi * d_hsi)
             return (d_fusion - d_gt) ** 2
         
         # 制約条件: 重みの合計は1.0, 各重みは0~1の間
         constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
-        bounds = [(0, 1), (0, 1), (0, 1)]
+        bounds = [(0, 1), (0, 1), (0, 1), (0, 1), (0, 1)]
         
         # 初期値は均等
-        init_weights = [0.33, 0.33, 0.33]
+        init_weights = [0.2, 0.2, 0.2, 0.2, 0.2]
         res = minimize(loss_fn, init_weights, bounds=bounds, constraints=constraints)
         return res.x if res.success else init_weights
 
@@ -44,7 +46,7 @@ class SensorWeightOptimizer:
 
         print("理想的な重みを計算中...")
         # 欠損値やエラー値(inf)を除外
-        valid_df = self.df.replace([np.inf, -np.inf], np.nan).dropna(subset=['dist_gt', 'dist_ai', 'dist_camera', 'dist_lidar'])
+        valid_df = self.df.replace([np.inf, -np.inf], np.nan).dropna(subset=['dist_gt', 'dist_lidar', 'dist_stereo', 'dist_camera', 'dist_ai', 'dist_hsi'])
         
         if len(valid_df) == 0:
             print("Error: 有効なデータ行が存在しません。")
@@ -67,5 +69,18 @@ class SensorWeightOptimizer:
         print("Meta-Learnerモデルの保存が完了しました。(models/fusion_meta_learner.pkl)")
 
 if __name__ == "__main__":
-    optimizer = SensorWeightOptimizer("results/optuna_history_sequence_Random.csv")
-    optimizer.train_meta_learner()
+    import glob
+    
+    # 最新の experiment_log_*.csv を自動で探す
+    log_files = glob.glob("results/experiment_log_*.csv")
+    if not log_files:
+        # 古い名前へのフォールバック
+        log_files = glob.glob("results/experiment_log.csv")
+        
+    if log_files:
+        latest_csv = max(log_files, key=os.path.getctime)
+        print(f"[{latest_csv}] を読み込んで最適化を開始します...")
+        optimizer = SensorWeightOptimizer(latest_csv)
+        optimizer.train_meta_learner()
+    else:
+        print("エラー: センサーの記録データ(experiment_log_*.csv)が見つかりません。")

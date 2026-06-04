@@ -22,6 +22,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     print("====================================================")
     
     os.makedirs("results", exist_ok=True)
+    global_run_id = time.strftime("%Y%m%d_%H%M%S")
     
     print("  => Using Random Sampler as per user instruction (No optimization).")
     sampler = optuna.samplers.RandomSampler(seed=None)
@@ -41,7 +42,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         fog_density = trial.suggest_float("fog_density", 0.0, 100.0)
         
         # 実験インスタンスの初期化
-        experiment = CameraOnlyExperiment(demo_mode=demo_mode, record_video=record_video)
+        experiment = CameraOnlyExperiment(demo_mode=demo_mode, record_video=record_video, run_id=global_run_id)
         
         edge_case_img_file = ""
         try:
@@ -99,7 +100,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     
     # 歴史データをCSVに記録
     df_history = pd.DataFrame(history)
-    df_history.to_csv(f"results/optuna_history_{scenario_name}_{sampler_name}.csv", index=False)
+    df_history.to_csv(f"results/optuna_history_{scenario_name}_{sampler_name}_{global_run_id}.csv", index=False)
     
     # Vulnerability Map (Scatter plot of Weather vs Gap)
     import matplotlib.pyplot as plt

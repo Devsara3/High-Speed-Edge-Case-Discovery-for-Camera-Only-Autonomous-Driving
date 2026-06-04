@@ -902,8 +902,9 @@ class CameraOnlyExperiment:
         global_dist_camera = float('inf')
         global_dist_stereo = float('inf')
         global_dist_ai = float('inf')
+        global_dist_hsi = float('inf')
         
-        # YOLO縺ｮ蜷・ヰ繧ｦ繝ｳ繝・ぅ繝ｳ繧ｰ繝懊ャ繧ｯ繧ｹ蜀・〒縲´iDAR縺ｨStereo縺ｮ遨ｺ髢薙ヵ繝･繝ｼ繧ｸ繝ｧ繝ｳ繧貞ｮ溯｡・
+        # YOLOの各バウンディングボックス内で、LiDARとStereoの空間フュージョンを実行
         for det in yolo_detections:
             stereo_d = det.get('z_distance', float('inf'))
             actual_stereo = det.get('dist_stereo', float('inf'))
@@ -947,7 +948,8 @@ class CameraOnlyExperiment:
                     global_dist_lidar = lidar_d
                     global_dist_camera = stereo_d
                     global_dist_stereo = actual_stereo
-                    global_dist_ai = dist_hsi
+                    global_dist_ai = actual_ai
+                    global_dist_hsi = dist_hsi
                     
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
@@ -1009,6 +1011,7 @@ class CameraOnlyExperiment:
             'dist_camera': global_dist_camera,
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
+            'dist_hsi': global_dist_hsi,
             'dist_gt': dist_gt,
             'v_approach': measured_rel_vel,
             'r_fusion': r_fusion,
@@ -1209,6 +1212,33 @@ class CameraOnlyExperiment:
         if not self.demo_mode:
             self._destroy_actors()
 
+    def _safe_spawn_actor(self, bp, target_loc, rot, forward_vector):
+        import carla
+        loc = carla.Location(target_loc.x, target_loc.y, target_loc.z)
+        
+        for i in range(5):
+            ray_start = loc + carla.Location(z=1.0)
+            ray_end = loc - carla.Location(z=1.0)
+            labeled_objects = self.world.cast_ray(ray_start, ray_end)
+            
+            actor = None
+            if len(labeled_objects) == 0:
+                actor = self.world.try_spawn_actor(bp, carla.Transform(loc, rot))
+                
+            if actor is not None:
+                return actor
+                
+            print(f"⚠️ Obstacle detected at spawn location. Adjusting backward... (Attempt {i+1}/5)")
+            loc -= forward_vector * 1.5
+            
+        print("⚠️ All spawn attempts failed. Using fallback to road center.")
+        wp = self.world.get_map().get_waypoint(target_loc)
+        if wp:
+            fallback_loc = wp.transform.location
+            fallback_loc.z += 1.0
+            return self.world.try_spawn_actor(bp, carla.Transform(fallback_loc, rot))
+        return None
+
     def _inject_dynamic_hazard(self, seq, spawn_dist):
         if self.demo_mode:
             return
@@ -1219,18 +1249,21 @@ class CameraOnlyExperiment:
             return
             
         ego_transform = self.ego_vehicle.get_transform()
-        forward = ego_transform.get_forward_vector()
-        right = ego_transform.get_right_vector()
-        ego_loc = ego_transform.location
+        wp = self.world.get_map().get_waypoint(ego_transform.location)
+        target_wps = wp.next(spawn_dist)
+        target_wp = target_wps[0] if target_wps else wp
+        
+        base_loc = target_wp.transform.location
+        forward = target_wp.transform.get_forward_vector()
+        right = target_wp.transform.get_right_vector()
 
         if seq == 'A':
             bp_list = self.blueprint_library.filter('walker.pedestrian.0001')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('walker.*')[0]
-            loc = ego_loc + forward * spawn_dist - right * 3.5
-            loc.z += 0.5
-            rot = carla.Rotation(yaw=ego_transform.rotation.yaw + 90.0)
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            loc = base_loc - right * 3.5
+            loc.z += 1.0
+            rot = carla.Rotation(yaw=target_wp.transform.rotation.yaw + 90.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1241,11 +1274,10 @@ class CameraOnlyExperiment:
                 
         elif seq == 'B':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = ego_loc + forward * spawn_dist
-            loc.z += 0.5
-            rot = ego_transform.rotation
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            loc = base_loc
+            loc.z += 1.0
+            rot = target_wp.transform.rotation
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1253,11 +1285,10 @@ class CameraOnlyExperiment:
                 
         elif seq == 'C':
             bp = self.blueprint_library.filter('model3')[0]
-            loc = ego_loc + forward * spawn_dist + right * 3.5
-            loc.z += 0.5
-            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw + 180.0, roll=0.0)
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            loc = base_loc + right * 3.5
+            loc.z += 1.0
+            rot = carla.Rotation(pitch=0.0, yaw=target_wp.transform.rotation.yaw + 180.0, roll=0.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1265,28 +1296,23 @@ class CameraOnlyExperiment:
                 self.target_actor.set_target_velocity(vel)
                 
         elif seq == 'D':
-            bp = self.blueprint_library.filter('vehicle.toyota.prius')[0]
-            loc = ego_loc + forward * spawn_dist
-            loc.z += 0.5
-            rot = ego_transform.rotation
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            bp_list = self.blueprint_library.filter('static.prop.constructioncone')
+            bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('static.prop.*')[0]
+            loc = base_loc
+            loc.z += 1.0
+            rot = target_wp.transform.rotation
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
-                self.target_actor.set_autopilot(False)
-                control = carla.VehicleControl()
-                control.brake = 1.0
-                self.target_actor.apply_control(control)
                 
         elif seq == 'E':
             bp_list = self.blueprint_library.filter('vehicle.ford.mustang')
             bp = bp_list[0] if len(bp_list) > 0 else self.blueprint_library.filter('vehicle.*')[0]
-            loc = ego_loc + forward * spawn_dist + right * 15.0
-            loc.z += 0.5
-            rot = carla.Rotation(pitch=0.0, yaw=ego_transform.rotation.yaw - 90.0, roll=0.0)
-            target_transform = carla.Transform(loc, rot)
-            self.target_actor = self.world.try_spawn_actor(bp, target_transform)
+            loc = base_loc + right * 15.0
+            loc.z += 1.0
+            rot = carla.Rotation(pitch=0.0, yaw=target_wp.transform.rotation.yaw - 90.0, roll=0.0)
+            self.target_actor = self._safe_spawn_actor(bp, loc, rot, forward)
 
             if self.target_actor:
                 self.actors.append(self.target_actor)
@@ -1320,16 +1346,20 @@ class CameraOnlyExperiment:
                 
             self._inject_dynamic_hazard(seq, spawn_dist)
             
-            for tick in range(100):
+            scenario_phase = 0
+            tick = 0
+            
+            while True:
+                tick += 1
                 try:
                     import carla
                     if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
-                        if seq == 'B' and tick == 30:
+                        if seq == 'B' and scenario_phase == 0 and tick == 30:
                             control = carla.VehicleControl()
                             control.brake = 1.0
                             control.throttle = 0.0
                             self.target_actor.apply_control(control)
-                        elif seq == 'C' and tick == 50:
+                        elif seq == 'C' and scenario_phase == 0 and tick == 50:
                             control = carla.VehicleControl()
                             control.throttle = 0.5
                             control.steer = -0.6
@@ -1342,14 +1372,50 @@ class CameraOnlyExperiment:
                 if hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None:
                     vel = self.ego_vehicle.get_velocity()
                     ego_speed = 3.6 * np.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
+                    
                     if tick > 15 and ego_speed < 0.5:
                         consecutive_stopped_ticks += 1
                     else:
                         consecutive_stopped_ticks = 0
                         
                     if consecutive_stopped_ticks >= 5:
-                        print(f"[Tick {tick}] Break loop due to stop.")
-                        break
+                        print(f"[Tick {tick}] Stopped for 5 ticks at Phase {scenario_phase}.")
+                        if scenario_phase == 0:
+                            if hasattr(self, 'target_actor') and self.target_actor:
+                                print(f"[Tick {tick}] Destroying initial obstacle (Scenario {seq}).")
+                                self.target_actor.destroy()
+                                self.target_actor = None
+                            consecutive_stopped_ticks = 0
+                            scenario_phase = 1
+                        elif scenario_phase == 2:
+                            print(f"[Tick {tick}] FULL SEQUENCE SUCCESS (Vehicle at 30m).")
+                            break
+                            
+                    if scenario_phase == 1 and ego_speed > 5.0:
+                        print(f"[Tick {tick}] Ego resumed driving. Spawning second obstacle at 30m.")
+                        try:
+                            import carla
+                            ego_tf = self.ego_vehicle.get_transform()
+                            wp = self.world.get_map().get_waypoint(ego_tf.location)
+                            target_wps = wp.next(30.0)
+                            target_wp = target_wps[0] if target_wps else wp
+                            
+                            car_loc = target_wp.transform.location
+                            car_loc.z += 1.0
+                            forward = target_wp.transform.get_forward_vector()
+                            
+                            bp = self.blueprint_library.filter('vehicle.tesla.model3')[0]
+                            self.target_actor = self._safe_spawn_actor(bp, car_loc, target_wp.transform.rotation, forward)
+                            if self.target_actor:
+                                self.actors.append(self.target_actor)
+                                self.target_actor.set_autopilot(False)
+                                scenario_phase = 2
+                        except Exception as e:
+                            print(f"Spawn Error at Phase 2: {e}")
+                            
+                if tick > 1000:
+                    print("[Timeout] Forcing end of trial.")
+                    break
                         
             self._save_worst_image(seq)
 
@@ -1437,7 +1503,7 @@ if __name__ == "__main__":
         else:
             experiment.run_experiment(args.scenario, target_speed_kph=args.ego_speed, gap=args.gap, deceleration=args.decel)
             
-        experiment.visualize_and_save(args.save_path, scenario_name=args.scenario)
+        # experiment.visualize_and_save(args.save_path, scenario_name=args.scenario)
         
     finally:
         experiment.shutdown()
