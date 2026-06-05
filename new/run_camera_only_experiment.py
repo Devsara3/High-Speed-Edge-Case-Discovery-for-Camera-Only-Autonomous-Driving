@@ -30,6 +30,7 @@ class CameraOnlyExperiment:
         self.video_frames = []
         self.evaluator = YoloEvaluator()
         self.risk_calculator = RiskCalculator()
+        self.meta_learners = {}
         self.camera_type = 'RGB' # 繝・ヵ繧ｩ繝ｫ繝医・RGB
         self.actors = []
         self.training_data = []
@@ -921,18 +922,48 @@ class CameraOnlyExperiment:
                 if len(lidar_in_box) > 0:
                     lidar_d = np.median(lidar_in_box)
                 
-                # 繧ｹ繝槭・繝医・繝輔Η繝ｼ繧ｸ繝ｧ繝ｳ
-
-                if not np.isinf(lidar_d) and not np.isinf(stereo_d):
-                    # LiDAR縺ｨStereo縺ｮ蟾ｮ縺悟ｰ上＆縺代ｌ縺ｰ・医∪縺溘・繧ｫ繝｡繝ｩ縺碁□縺吶℃縺ｦLiDAR縺瑚ｿ代＞蝣ｴ蜷医・髮ｨ邊偵・蜿ｯ閭ｽ諤ｧ縺ゅｊ・・
-                    if abs(lidar_d - stereo_d) < 5.0 or (lidar_d > 3.0):
-                        final_d = lidar_d # 鬮倡ｲｾ蠎ｦ縺ｪLiDAR繧剃ｿ｡逕ｨ
+                # 動的シナリオ別ウェイト予測によるフュージョン
+                precipitation = getattr(self, 'current_weather', {}).get('precipitation', 0.0)
+                fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
+                
+                in_ai = np.nan if np.isinf(actual_ai) else actual_ai
+                in_stereo = np.nan if np.isinf(actual_stereo) else actual_stereo
+                in_camera = np.nan if np.isinf(stereo_d) else stereo_d
+                in_lidar = np.nan if np.isinf(lidar_d) else lidar_d
+                
+                scenario_str = str(scenario_type)
+                model_name = f'fusion_meta_learner_{scenario_str}.pkl'
+                model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
+                model_path = os.path.join(model_dir, model_name)
+                fallback_path = os.path.join(model_dir, 'fusion_meta_learner.pkl')
+                
+                if scenario_str not in self.meta_learners:
+                    import joblib
+                    if os.path.exists(model_path):
+                        self.meta_learners[scenario_str] = joblib.load(model_path)
+                    elif os.path.exists(fallback_path):
+                        self.meta_learners[scenario_str] = joblib.load(fallback_path)
                     else:
-                        final_d = stereo_d # LiDAR縺ｮ霑第磁繝弱う繧ｺ(繧ｴ繝ｼ繧ｹ繝・縺ｨ縺励※譽・唆縺励ヾtereo繧剃ｿ｡逕ｨ
-                elif not np.isinf(lidar_d):
-                    final_d = lidar_d
+                        self.meta_learners[scenario_str] = None
+                        
+                current_model = self.meta_learners.get(scenario_str)
+                
+                if current_model is not None:
+                    X = np.array([[precipitation, fog, in_ai, in_stereo, in_camera, in_lidar]])
+                    predicted_weights = current_model.predict(X)[0]
+                    w_ai, w_stereo, w_camera, w_lidar = predicted_weights
                 else:
-                    final_d = stereo_d
+                    w_ai, w_stereo, w_camera, w_lidar = 0.25, 0.25, 0.25, 0.25
+                
+                self.current_weights = (w_ai, w_stereo, w_camera, w_lidar)
+                
+                final_d = (w_ai * np.nan_to_num(in_ai, nan=0.0)) + \
+                          (w_stereo * np.nan_to_num(in_stereo, nan=0.0)) + \
+                          (w_camera * np.nan_to_num(in_camera, nan=0.0)) + \
+                          (w_lidar * np.nan_to_num(in_lidar, nan=0.0))
+                
+                if final_d == 0.0:
+                    final_d = float('inf')
                 
                 det['fused_distance'] = final_d
                 det['lidar_distance'] = lidar_d
