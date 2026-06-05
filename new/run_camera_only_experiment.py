@@ -3,7 +3,7 @@ import sys
 import time
 import argparse
 import numpy as np
-from hsc_emulator import HSCEmulator
+import joblib
 import cv2
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -30,6 +30,7 @@ class CameraOnlyExperiment:
         self.video_frames = []
         self.evaluator = YoloEvaluator()
         self.risk_calculator = RiskCalculator()
+        self.meta_learners = {}
         self.camera_type = 'RGB' # 繝・ヵ繧ｩ繝ｫ繝医・RGB
         self.actors = []
         self.training_data = []
@@ -108,6 +109,8 @@ class CameraOnlyExperiment:
         self._collision_registered_this_scenario = False
         self.max_gap_this_run = -float('inf')
         self.worst_case_image = None
+        self.collision_image = None
+        self.min_dist_image = None
         self.worst_case_step = 0
         
         # Ego蛻晄悄菴咲ｽｮ繝ｻ騾溷ｺｦ險ｭ螳・
@@ -196,6 +199,8 @@ class CameraOnlyExperiment:
         self._collision_registered_this_scenario = False
         self.max_gap_this_run = -float('inf')
         self.worst_case_image = None
+        self.collision_image = None
+        self.min_dist_image = None
         self.worst_case_step = 0
         
         spawn_points = self.world.get_map().get_spawn_points()
@@ -715,9 +720,7 @@ class CameraOnlyExperiment:
                         self.target_actor.apply_control(control)
             
             yolo_detections = self.evaluator.evaluate_multi(image_left, image_right=image_right, ego_speed=ego_vel[0])
-            # ====================================================
-            # 🔥 【真のHSC統合】GTを一切使わず、RGB画像とYOLOのBBox（または中央領域）から距離を復元
-            # ====================================================
+            
             current_fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
             target_box = None
             if yolo_detections:
@@ -902,7 +905,6 @@ class CameraOnlyExperiment:
         global_dist_camera = float('inf')
         global_dist_stereo = float('inf')
         global_dist_ai = float('inf')
-        global_dist_hsi = float('inf')
         
         # YOLOの各バウンディングボックス内で、LiDARとStereoの空間フュージョンを実行
         for det in yolo_detections:
@@ -920,18 +922,48 @@ class CameraOnlyExperiment:
                 if len(lidar_in_box) > 0:
                     lidar_d = np.median(lidar_in_box)
                 
-                # 繧ｹ繝槭・繝医・繝輔Η繝ｼ繧ｸ繝ｧ繝ｳ
-
-                if not np.isinf(lidar_d) and not np.isinf(stereo_d):
-                    # LiDAR縺ｨStereo縺ｮ蟾ｮ縺悟ｰ上＆縺代ｌ縺ｰ・医∪縺溘・繧ｫ繝｡繝ｩ縺碁□縺吶℃縺ｦLiDAR縺瑚ｿ代＞蝣ｴ蜷医・髮ｨ邊偵・蜿ｯ閭ｽ諤ｧ縺ゅｊ・・
-                    if abs(lidar_d - stereo_d) < 5.0 or (lidar_d > 3.0):
-                        final_d = lidar_d # 鬮倡ｲｾ蠎ｦ縺ｪLiDAR繧剃ｿ｡逕ｨ
+                # 動的シナリオ別ウェイト予測によるフュージョン
+                precipitation = getattr(self, 'current_weather', {}).get('precipitation', 0.0)
+                fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
+                
+                in_ai = np.nan if np.isinf(actual_ai) else actual_ai
+                in_stereo = np.nan if np.isinf(actual_stereo) else actual_stereo
+                in_camera = np.nan if np.isinf(stereo_d) else stereo_d
+                in_lidar = np.nan if np.isinf(lidar_d) else lidar_d
+                
+                scenario_str = str(scenario_type)
+                model_name = f'fusion_meta_learner_{scenario_str}.pkl'
+                model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
+                model_path = os.path.join(model_dir, model_name)
+                fallback_path = os.path.join(model_dir, 'fusion_meta_learner.pkl')
+                
+                if scenario_str not in self.meta_learners:
+                    import joblib
+                    if os.path.exists(model_path):
+                        self.meta_learners[scenario_str] = joblib.load(model_path)
+                    elif os.path.exists(fallback_path):
+                        self.meta_learners[scenario_str] = joblib.load(fallback_path)
                     else:
-                        final_d = stereo_d # LiDAR縺ｮ霑第磁繝弱う繧ｺ(繧ｴ繝ｼ繧ｹ繝・縺ｨ縺励※譽・唆縺励ヾtereo繧剃ｿ｡逕ｨ
-                elif not np.isinf(lidar_d):
-                    final_d = lidar_d
+                        self.meta_learners[scenario_str] = None
+                        
+                current_model = self.meta_learners.get(scenario_str)
+                
+                if current_model is not None:
+                    X = np.array([[precipitation, fog, in_ai, in_stereo, in_camera, in_lidar]])
+                    predicted_weights = current_model.predict(X)[0]
+                    w_ai, w_stereo, w_camera, w_lidar = predicted_weights
                 else:
-                    final_d = stereo_d
+                    w_ai, w_stereo, w_camera, w_lidar = 0.25, 0.25, 0.25, 0.25
+                
+                self.current_weights = (w_ai, w_stereo, w_camera, w_lidar)
+                
+                final_d = (w_ai * np.nan_to_num(in_ai, nan=0.0)) + \
+                          (w_stereo * np.nan_to_num(in_stereo, nan=0.0)) + \
+                          (w_camera * np.nan_to_num(in_camera, nan=0.0)) + \
+                          (w_lidar * np.nan_to_num(in_lidar, nan=0.0))
+                
+                if final_d == 0.0:
+                    final_d = float('inf')
                 
                 det['fused_distance'] = final_d
                 det['lidar_distance'] = lidar_d
@@ -949,7 +981,6 @@ class CameraOnlyExperiment:
                     global_dist_camera = stereo_d
                     global_dist_stereo = actual_stereo
                     global_dist_ai = actual_ai
-                    global_dist_hsi = dist_hsi
                     
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
@@ -962,7 +993,8 @@ class CameraOnlyExperiment:
         
         # 蠕梧婿莠呈鋤諤ｧ縺ｮ縺溘ａ縲∽ｻ･蜑阪・calculate_multi_risk繧ゆｸｦ陦後＠縺ｦ蜻ｼ縺ｳ蜃ｺ縺・
         r_perceived, r_gt, gap_multi, multi_info = self.risk_calculator.calculate_multi_risk(
-            ego_pos, ego_vel, gt_obstacles, yolo_detections
+            ego_pos, ego_vel, gt_obstacles, yolo_detections,
+            measured_rel_vel=measured_rel_vel if 'measured_rel_vel' in locals() else None
         )
         
         # Optuna譛€驕ｩ蛹悶・逶ｮ逧・未謨ｰ縺ｨ縺励※縺ｮ Gap 縺ｯ莉･蜑阪・繧ゅ・繧偵◎縺ｮ縺ｾ縺ｾ蠑輔″邯吶＄・郁ｧ｣譫蝉ｺ呈鋤諤ｧ・・
@@ -972,6 +1004,8 @@ class CameraOnlyExperiment:
         if not hasattr(self, 'max_gap_this_run'):
             self.max_gap_this_run = -float('inf')
             self.worst_case_image = None
+            self.collision_image = None
+            self.min_dist_image = None
             self.worst_case_step = 0
 
             
@@ -1011,7 +1045,10 @@ class CameraOnlyExperiment:
             'dist_camera': global_dist_camera,
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
-            'dist_hsi': global_dist_hsi,
+            'w_ai': getattr(self, 'current_weights', (0,0,0,0))[0],
+            'w_stereo': getattr(self, 'current_weights', (0,0,0,0))[1],
+            'w_camera': getattr(self, 'current_weights', (0,0,0,0))[2],
+            'w_lidar': getattr(self, 'current_weights', (0,0,0,0))[3],
             'dist_gt': dist_gt,
             'v_approach': measured_rel_vel,
             'r_fusion': r_fusion,
@@ -1047,6 +1084,7 @@ class CameraOnlyExperiment:
                         
             if current_min_dist < self.scenario_min_distance:
                 self.scenario_min_distance = current_min_dist
+                self.min_dist_image = image.copy()
 
                 
             if current_min_dist < 1.0:
@@ -1054,6 +1092,7 @@ class CameraOnlyExperiment:
                 if getattr(self, '_collision_registered_this_scenario', False) == False:
                     self.scenario_collisions += 1
                     self._collision_registered_this_scenario = True
+                    self.collision_image = image.copy()
                     print(f"[CRASH] Collision detected! Min Distance: {current_min_dist:.2f}m")
                     
         log_entry['min_gt_distance'] = self.scenario_min_distance
@@ -1061,6 +1100,7 @@ class CameraOnlyExperiment:
         cv2.putText(image, f"Risk: {r_fusion:.2f} | Gap: {gap:.2f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255) if r_fusion > 1.0 else (0, 255, 0), 2)
         cv2.putText(image, f"Action: {'Brake' if accel_cmd < 0 else 'Cruise'} | Steer: {steer_cmd:.2f}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
         cv2.putText(image, f"Dist (L/C/F): {global_dist_lidar:.1f} / {global_dist_camera:.1f} / {fused_dist:.1f}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
 
         
         if hasattr(self, 'video_writer'):
@@ -1459,6 +1499,12 @@ class CameraOnlyExperiment:
         
     def get_worst_case_image(self):
         return getattr(self, 'worst_case_image', None)
+        
+    def get_collision_image(self):
+        return getattr(self, 'collision_image', None)
+        
+    def get_min_dist_image(self):
+        return getattr(self, 'min_dist_image', None)
 
     def export_training_data(self, filepath="results/distance_training_data.csv"):
         if not self.training_data:

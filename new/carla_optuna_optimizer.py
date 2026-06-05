@@ -22,13 +22,10 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     print("====================================================")
     
     os.makedirs("results", exist_ok=True)
+    global_run_id = time.strftime("%Y%m%d_%H%M%S")
     
-    if sampler_name == 'TPE':
-        print("  => Using TPE Sampler (Optimization enabled).")
-        sampler = optuna.samplers.TPESampler(seed=None)
-    else:
-        print("  => Using Random Sampler (No optimization).")
-        sampler = optuna.samplers.RandomSampler(seed=None)
+    print("  => Using TPE Sampler (Optimization enabled).")
+    sampler = optuna.samplers.TPESampler(seed=None)
         
     study = optuna.create_study(direction="maximize", sampler=sampler)
     history = []
@@ -40,12 +37,12 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         start_time = time.time()
         
         # 探索空間の設定
-        sun_altitude_angle = trial.suggest_float("sun_altitude_angle", -15.0, 90.0)
+        sun_altitude_angle = 45.0  # fixed for fair comparison across trials
         precipitation = trial.suggest_float("precipitation", 0.0, 100.0)
         fog_density = trial.suggest_float("fog_density", 0.0, 100.0)
         
         # 実験インスタンスの初期化
-        experiment = CameraOnlyExperiment(demo_mode=demo_mode, record_video=record_video)
+        experiment = CameraOnlyExperiment(demo_mode=demo_mode, record_video=record_video, run_id=global_run_id)
         
         edge_case_img_file = ""
         try:
@@ -63,20 +60,33 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
             min_dist = experiment.get_min_distance()
             collisions = experiment.get_collision_count()
             worst_params = experiment.get_worst_case_parameters()
-            
-            # 最悪結果の更新と可視化グラフ保存
+
+            import cv2
+            # 衝突画像の保存
+            col_img = getattr(experiment, 'get_collision_image', lambda: None)()
+            if col_img is not None:
+                cv2.imwrite(os.path.join("results", f"trial_{trial.number}_collision.png"), col_img)
+
+            # MinDist画像の保存
+            min_img = getattr(experiment, 'get_min_dist_image', lambda: None)()
+            if min_img is not None:
+                cv2.imwrite(os.path.join("results", f"trial_{trial.number}_min_dist.png"), min_img)
+
+            # MaxGap画像の保存
+            worst_img = experiment.get_worst_image()
+            if worst_img is not None:
+                img_filename = f"trial_{trial.number}_max_gap.png"
+                cv2.imwrite(os.path.join("results", img_filename), worst_img)
+                edge_case_img_file = img_filename
+
+            # 最悪結果の更新
             if max_gap > worst_gap:
                 worst_gap = max_gap
-                
-                worst_img = experiment.get_worst_image()
-                if worst_img is not None:
-                    import cv2
-                    img_filename = f"edge_case_trial_{trial.number}.png"
-                    cv2.imwrite(os.path.join("results", img_filename), worst_img)
-                    edge_case_img_file = img_filename
-                    
-                print(f"\n--> [NEW WORST WEATHER DISCOVERD] Gap: {max_gap:.4f} | MinDist: {min_dist:.2f}m | Collisions: {collisions}")
-                print(f"    Params: Sun Alt={sun_altitude_angle:.2f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
+                print(f"\n--> [NEW WORST GAP DISCOVERED] Gap: {max_gap:.4f} | MinDist: {min_dist:.2f}m | Collisions: {collisions}")
+                print(f"    Params: Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
+            else:
+                print(f"\n--> [TRIAL {trial.number}] Gap: {max_gap:.4f} | MinDist: {min_dist:.2f}m | Collisions: {collisions}")
+                print(f"    Params: Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
                 
         finally:
             experiment.shutdown()
@@ -103,7 +113,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     
     # 歴史データをCSVに記録
     df_history = pd.DataFrame(history)
-    df_history.to_csv(f"results/optuna_history_{scenario_name}_{sampler_name}.csv", index=False)
+    df_history.to_csv(f"results/optuna_history_{scenario_name}_{sampler_name}_{global_run_id}.csv", index=False)
     
     # Vulnerability Map (Scatter plot of Weather vs Gap)
     import matplotlib.pyplot as plt
