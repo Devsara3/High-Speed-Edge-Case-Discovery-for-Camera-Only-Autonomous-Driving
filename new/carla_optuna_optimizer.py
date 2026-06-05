@@ -22,13 +22,10 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     print("====================================================")
     
     os.makedirs("results", exist_ok=True)
+    global_run_id = time.strftime("%Y%m%d_%H%M%S")
     
-    if sampler_name == 'TPE':
-        print("  => Using TPE Sampler (Optimization enabled).")
-        sampler = optuna.samplers.TPESampler(seed=None)
-    else:
-        print("  => Using Random Sampler (No optimization).")
-        sampler = optuna.samplers.RandomSampler(seed=None)
+    print("  => Using Random Sampler as per user instruction (No optimization).")
+    sampler = optuna.samplers.RandomSampler(seed=None)
         
     study = optuna.create_study(direction="maximize", sampler=sampler)
     history = []
@@ -40,12 +37,12 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         start_time = time.time()
         
         # 探索空間の設定
-        sun_altitude_angle = 45.0
+        sun_altitude_angle = 45.0  # fixed for fair comparison across trials
         precipitation = trial.suggest_float("precipitation", 0.0, 100.0)
         fog_density = trial.suggest_float("fog_density", 0.0, 100.0)
         
         # 実験インスタンスの初期化
-        experiment = CameraOnlyExperiment(demo_mode=demo_mode, record_video=record_video)
+        experiment = CameraOnlyExperiment(demo_mode=demo_mode, record_video=record_video, run_id=global_run_id)
         
         edge_case_img_file = ""
         try:
@@ -63,19 +60,19 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
             min_dist = experiment.get_min_distance()
             collisions = experiment.get_collision_count()
             worst_params = experiment.get_worst_case_parameters()
-            
+
             import cv2
             # 衝突画像の保存
             col_img = getattr(experiment, 'get_collision_image', lambda: None)()
             if col_img is not None:
                 cv2.imwrite(os.path.join("results", f"trial_{trial.number}_collision.png"), col_img)
-                
+
             # MinDist画像の保存
             min_img = getattr(experiment, 'get_min_dist_image', lambda: None)()
             if min_img is not None:
                 cv2.imwrite(os.path.join("results", f"trial_{trial.number}_min_dist.png"), min_img)
 
-            # MaxGap(最悪認識)画像の保存
+            # MaxGap画像の保存
             worst_img = experiment.get_worst_image()
             if worst_img is not None:
                 img_filename = f"trial_{trial.number}_max_gap.png"
@@ -116,7 +113,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     
     # 歴史データをCSVに記録
     df_history = pd.DataFrame(history)
-    df_history.to_csv(f"results/optuna_history_{scenario_name}_{sampler_name}.csv", index=False)
+    df_history.to_csv(f"results/optuna_history_{scenario_name}_{sampler_name}_{global_run_id}.csv", index=False)
     
     # Vulnerability Map (Scatter plot of Weather vs Gap)
     import matplotlib.pyplot as plt
