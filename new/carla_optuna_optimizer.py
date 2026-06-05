@@ -151,7 +151,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CARLA/Mock ADAS Optuna Weather search")
     parser.add_argument("--trials", type=int, default=5, help="Number of Optuna trials (default: 5)")
-    parser.add_argument("--sampler", type=str, default="Random", choices=["TPE", "Random"], help="Sampler (default: Random)")
+    parser.add_argument("--sampler", type=str, default="TPE", choices=["TPE", "Random"], help="Sampler (default: TPE)")
     parser.add_argument("--scenario", type=str, default="sequence", choices=["A", "B", "C", "D", "E", "sequence"], 
                         help="Scenario skeleton: A (CPNA), B (CCRb), C (CCFtap), D (AVOID), E (RLI), sequence (all dynamically)")
     parser.add_argument("--mode", type=str, default="exploit", choices=["exploit", "explore"], help="Mode: exploit (find worst edge cases) or explore (collect random diverse data)")
