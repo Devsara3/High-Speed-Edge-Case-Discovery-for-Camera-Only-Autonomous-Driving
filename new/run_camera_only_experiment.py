@@ -1101,6 +1101,7 @@ class CameraOnlyExperiment:
         cv2.putText(image, f"Action: {'Brake' if accel_cmd < 0 else 'Cruise'} | Steer: {steer_cmd:.2f}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
         cv2.putText(image, f"Dist (L/C/F): {global_dist_lidar:.1f} / {global_dist_camera:.1f} / {fused_dist:.1f}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
+
         
         if hasattr(self, 'video_writer'):
             self.video_writer.write(image)
