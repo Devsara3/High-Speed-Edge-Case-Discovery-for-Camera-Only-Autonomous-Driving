@@ -14,11 +14,15 @@ class RiskCalculator:
         # 車種に応じた危険度係数（mu_i）のルックアップテーブル
         self.class_mu_table = {
             'pedestrian': 1.8,
+            'truck': 1.2,
             'car': 1.0,
+            'bicycle': 1.3,
+            'construction_signal': 1.5,
+            'traffic_light': 2.0,
             'unknown': 1.0
         }
 
-    def calculate_risk(self, ego_pos, ego_vel, target_pos, target_vel, target_class, yolo_z_distance, measured_rel_vel=None):
+    def calculate_risk(self, ego_pos, ego_vel, target_pos, target_vel, target_class, yolo_z_distance):
         """
         単一障害物に対する知覚リスク R_perceived を計算します。
         
@@ -45,13 +49,11 @@ class RiskCalculator:
         else:
             rel_pos_dir = rel_pos / distance_gt
             
-        if measured_rel_vel is not None:
-            approach_speed = measured_rel_vel
-        else:
-            rel_vel = ego_vel - target_vel # 自車から見た相手の相対接近速度ベクトル
-            # 2. omega: 相互作用の重み（内積による接近判定）
-            # 相対速度が相手の方向に向かっているか（正なら接近、負なら離脱）
-            approach_speed = np.dot(rel_vel, rel_pos_dir)
+        rel_vel = ego_vel - target_vel # 自車から見た相手の相対接近速度ベクトル
+
+        # 2. omega: 相互作用の重み（内積による接近判定）
+        # 相対速度が相手の方向に向かっているか（正なら接近、負なら離脱）
+        approach_speed = np.dot(rel_vel, rel_pos_dir)
         
         if approach_speed > 0:
             omega = 1.0 # 接近中
@@ -155,7 +157,7 @@ class RiskCalculator:
         
         return r_fusion, debug_info
 
-    def calculate_multi_risk(self, ego_pos, ego_vel, gt_obstacles, yolo_detections, measured_rel_vel=None):
+    def calculate_multi_risk(self, ego_pos, ego_vel, gt_obstacles, yolo_detections):
         """
         複数のオブジェクトに対して、個別に知覚リスクと物理リスクを計算し、
         アクターごとの知覚ギャップ（r_gt - r_perceived）の最大値を選択して統合します。
@@ -164,7 +166,6 @@ class RiskCalculator:
         :param ego_vel: 自車速度 [vx, vy, vz]
         :param gt_obstacles: 真値の障害物リスト [{'class':..., 'pos':..., 'vel':..., 'mu':...}, ...]
         :param yolo_detections: YOLOの検出結果リスト [{'class':..., 'z_distance':..., 'yolo3d_rel_pos':..., 'traffic_light_color':...}, ...]
-        :param measured_rel_vel: Radarから取得した相対接近速度
         """
         max_r_perceived = 0.0
         max_r_gt = 0.0
@@ -224,8 +225,7 @@ class RiskCalculator:
             
             # 各障害物のリスク算出
             r_perceived, perceived_debug = self.calculate_risk(
-                ego_pos, ego_vel, gt_pos, gt_vel, perceived_class, yolo_z,
-                measured_rel_vel=measured_rel_vel if best_match is not None else None
+                ego_pos, ego_vel, gt_pos, gt_vel, perceived_class, yolo_z
             )
             
             # 物理リスク (YOLOの主観距離として実際のGT距離を与える)
@@ -312,8 +312,10 @@ class PerceivedRiskCalculator:
 
         # ③ カテゴリ係数 (mu) のルックアップテーブル
         self.class_mu_table = {
+            'truck': 1.5, 'bus': 1.5, 'trailer': 1.5,
+            'car': 1.0, 'van': 1.0,
             'pedestrian': 1.2,
-            'car': 1.0,
+            'bicycle': 1.2, 'motorcycle': 1.2,
             'unknown': 1.0
         }
 

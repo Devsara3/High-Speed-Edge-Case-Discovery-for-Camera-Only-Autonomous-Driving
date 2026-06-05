@@ -216,21 +216,39 @@ class CameraOnlyExperiment:
         self.worst_case_image = None
         self.worst_case_step = 0
         
-        import carla
+        spawn_points = self.world.get_map().get_spawn_points()
+        ego_transform = spawn_points[0]
         target_tl = None
-        ego_transform = carla.Transform(
-            carla.Location(x=-3.10, y=-183.51, z=0.78),
-            carla.Rotation(pitch=0.0, yaw=91.4, roll=0.0)
-        )
+        
+        # Find a spawn point with a traffic light within 40m ahead (all scenarios)
+        best_spawn = spawn_points[0]
+        for sp in spawn_points:
+            wp = self.world.get_map().get_waypoint(sp.location)
+            found = False
+            for _ in range(20):  # walk 40m ahead
+                next_wps = wp.next(2.0)
+                if not next_wps:
+                    break
+                wp = next_wps[0]
+                for tl in self.world.get_actors().filter('traffic.traffic_light'):
+                    if tl.get_location().distance(wp.transform.location) < 15.0:
+                        best_spawn = sp
+                        target_tl = tl
+                        found = True
+                        break
+                if found:
+                    break
+            if found:
+                break
+        ego_transform = best_spawn
         
         # 1. 閾ｪ霆翫・繧ｹ繝昴・繝ｳ
         ego_bp = self.blueprint_library.filter('model3')[0]
         ego_transform.location.z += 0.5
         self.ego_vehicle = self.world.spawn_actor(ego_bp, ego_transform)
         self.actors.append(self.ego_vehicle)
-        print(f"[SPAWN] Ego Vehicle: x={ego_transform.location.x:.2f} y={ego_transform.location.y:.2f} z={ego_transform.location.z:.2f} yaw={ego_transform.rotation.yaw:.1f}deg")
         
-        # Store start location
+        # 髢句ｧ倶ｽ咲ｽｮ縺ｮ險倬鹸
         self.scenario_start_loc = ego_transform.location
         self.scenario_start_x = ego_transform.location.x
         
@@ -1226,8 +1244,32 @@ class CameraOnlyExperiment:
         return {}
 
     def run_experiment(self, scenario_name, target_speed_kph=40.0, gap=12.0, deceleration=-6.0, max_ticks=200):
-        """Run a single scenario using the same multi-phase logic as run_sequence."""
-        self.run_sequence(single_scenario=scenario_name)
+        """
+        謖・ｮ壹＆繧後◆蜊倅ｸ繧ｷ繝翫Μ繧ｪ繧貞ｮ溯｡後・        """
+        print(f"\n===== Starting Scenario {scenario_name} =====")
+
+        if self.demo_mode:
+            self._setup_mock_scenario(scenario_name, target_speed_kph, gap, deceleration)
+        else:
+            self._setup_real_scenario(scenario_name, target_speed_kph, gap, deceleration)
+            
+        for tick in range(max_ticks):
+            log = self.run_step(scenario_name, target_speed_kph)
+
+            
+            if tick % 10 == 0:
+                print(f"Step {log['scenario_ticks']}: Ego X={log['ego_x']:.1f}m, Y={log['ego_y']:.2f}m, Vx={log['ego_vx']*3.6:.1f}km/h | worst={log['worst_obstacle']} | Gap={log['perception_gap']:.2f} (GT={log['r_gt']:.2f}, Perc={log['r_perceived']:.2f}) | mu_perc={log['mu_perceived']:.1f}, mu_gt={log['mu_gt']:.1f}")
+
+                
+            if self.clear_flag:
+                print(f"--> Scenario {scenario_name} CLEARED at Step {tick}!")
+                break
+
+        self._save_worst_image(scenario_name)
+
+
+        if not self.demo_mode:
+            self._destroy_actors()
 
     def _safe_spawn_actor(self, bp, target_loc, rot, forward_vector):
         import carla
@@ -1366,18 +1408,15 @@ class CameraOnlyExperiment:
                 control.throttle = 1.0
                 self.target_actor.apply_control(control)
 
-    def run_sequence(self, single_scenario=None):
+    def run_sequence(self):
         global _scenario_cycle
         import random
         import numpy as np
         target_speed_kph = 40.0
         consecutive_stopped_ticks = 0
 
-        if single_scenario:
-            seq = single_scenario
-        else:
-            seq = _SCENARIOS[_scenario_cycle % 5]
-            _scenario_cycle += 1
+        seq = _SCENARIOS[_scenario_cycle % 5]
+        _scenario_cycle += 1
         spawn_dist = random.uniform(30.0, 40.0)
 
         if self.demo_mode:
