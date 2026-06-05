@@ -3,7 +3,7 @@ import sys
 import time
 import argparse
 import numpy as np
-from hsc_emulator import HSCEmulator
+import joblib
 import cv2
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -108,6 +108,8 @@ class CameraOnlyExperiment:
         self._collision_registered_this_scenario = False
         self.max_gap_this_run = -float('inf')
         self.worst_case_image = None
+        self.collision_image = None
+        self.min_dist_image = None
         self.worst_case_step = 0
         
         # Ego蛻晄悄菴咲ｽｮ繝ｻ騾溷ｺｦ險ｭ螳・
@@ -196,6 +198,8 @@ class CameraOnlyExperiment:
         self._collision_registered_this_scenario = False
         self.max_gap_this_run = -float('inf')
         self.worst_case_image = None
+        self.collision_image = None
+        self.min_dist_image = None
         self.worst_case_step = 0
         
         spawn_points = self.world.get_map().get_spawn_points()
@@ -715,9 +719,7 @@ class CameraOnlyExperiment:
                         self.target_actor.apply_control(control)
             
             yolo_detections = self.evaluator.evaluate_multi(image_left, image_right=image_right, ego_speed=ego_vel[0])
-            # ====================================================
-            # 🔥 【真のHSC統合】GTを一切使わず、RGB画像とYOLOのBBox（または中央領域）から距離を復元
-            # ====================================================
+            
             current_fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
             target_box = None
             if yolo_detections:
@@ -902,7 +904,6 @@ class CameraOnlyExperiment:
         global_dist_camera = float('inf')
         global_dist_stereo = float('inf')
         global_dist_ai = float('inf')
-        global_dist_hsi = float('inf')
         
         # YOLOの各バウンディングボックス内で、LiDARとStereoの空間フュージョンを実行
         for det in yolo_detections:
@@ -949,7 +950,6 @@ class CameraOnlyExperiment:
                     global_dist_camera = stereo_d
                     global_dist_stereo = actual_stereo
                     global_dist_ai = actual_ai
-                    global_dist_hsi = dist_hsi
                     
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
@@ -962,7 +962,8 @@ class CameraOnlyExperiment:
         
         # 蠕梧婿莠呈鋤諤ｧ縺ｮ縺溘ａ縲∽ｻ･蜑阪・calculate_multi_risk繧ゆｸｦ陦後＠縺ｦ蜻ｼ縺ｳ蜃ｺ縺・
         r_perceived, r_gt, gap_multi, multi_info = self.risk_calculator.calculate_multi_risk(
-            ego_pos, ego_vel, gt_obstacles, yolo_detections
+            ego_pos, ego_vel, gt_obstacles, yolo_detections,
+            measured_rel_vel=measured_rel_vel if 'measured_rel_vel' in locals() else None
         )
         
         # Optuna譛€驕ｩ蛹悶・逶ｮ逧・未謨ｰ縺ｨ縺励※縺ｮ Gap 縺ｯ莉･蜑阪・繧ゅ・繧偵◎縺ｮ縺ｾ縺ｾ蠑輔″邯吶＄・郁ｧ｣譫蝉ｺ呈鋤諤ｧ・・
@@ -972,6 +973,8 @@ class CameraOnlyExperiment:
         if not hasattr(self, 'max_gap_this_run'):
             self.max_gap_this_run = -float('inf')
             self.worst_case_image = None
+            self.collision_image = None
+            self.min_dist_image = None
             self.worst_case_step = 0
 
             
@@ -1011,7 +1014,10 @@ class CameraOnlyExperiment:
             'dist_camera': global_dist_camera,
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
-            'dist_hsi': global_dist_hsi,
+            'w_ai': getattr(self, 'current_weights', (0,0,0,0))[0],
+            'w_stereo': getattr(self, 'current_weights', (0,0,0,0))[1],
+            'w_camera': getattr(self, 'current_weights', (0,0,0,0))[2],
+            'w_lidar': getattr(self, 'current_weights', (0,0,0,0))[3],
             'dist_gt': dist_gt,
             'v_approach': measured_rel_vel,
             'r_fusion': r_fusion,
@@ -1047,6 +1053,7 @@ class CameraOnlyExperiment:
                         
             if current_min_dist < self.scenario_min_distance:
                 self.scenario_min_distance = current_min_dist
+                self.min_dist_image = image.copy()
 
                 
             if current_min_dist < 1.0:
@@ -1054,6 +1061,7 @@ class CameraOnlyExperiment:
                 if getattr(self, '_collision_registered_this_scenario', False) == False:
                     self.scenario_collisions += 1
                     self._collision_registered_this_scenario = True
+                    self.collision_image = image.copy()
                     print(f"[CRASH] Collision detected! Min Distance: {current_min_dist:.2f}m")
                     
         log_entry['min_gt_distance'] = self.scenario_min_distance
@@ -1459,6 +1467,12 @@ class CameraOnlyExperiment:
         
     def get_worst_case_image(self):
         return getattr(self, 'worst_case_image', None)
+        
+    def get_collision_image(self):
+        return getattr(self, 'collision_image', None)
+        
+    def get_min_dist_image(self):
+        return getattr(self, 'min_dist_image', None)
 
     def export_training_data(self, filepath="results/distance_training_data.csv"):
         if not self.training_data:
