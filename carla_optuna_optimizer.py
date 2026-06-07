@@ -41,7 +41,8 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         start_time = time.time()
         
         # 探索空間の設定
-        sun_altitude_angle = 45.0  # fixed for fair comparison across trials
+        # マップ1(正午:順光), マップ2(夕方:逆光), マップ3(夜間:暗闇)
+        lighting_pattern = trial.suggest_categorical("lighting_pattern", ["Noon_FrontLight", "Evening_BackLight", "Night_Dark"])
         precipitation = trial.suggest_float("precipitation", 0.0, 100.0)
         fog_density = trial.suggest_float("fog_density", 0.0, 100.0)
         
@@ -51,7 +52,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         edge_case_img_file = ""
         try:
             # 天候適用
-            experiment.set_weather_params(sun_altitude_angle, precipitation, fog_density)
+            experiment.set_weather_params(lighting_pattern, precipitation, fog_density)
             
             # シナリオの実行
             if scenario_name == 'sequence':

@@ -478,9 +478,27 @@ class CameraOnlyExperiment:
         print("[INFO] Cleaned up actors.")
 
 
-    def set_weather_params(self, sun_alt, precip, fog):
+    def set_weather_params(self, lighting_pattern_or_alt, precip, fog):
+        if isinstance(lighting_pattern_or_alt, str):
+            if lighting_pattern_or_alt == "Noon_FrontLight":
+                sun_alt = 90.0
+                sun_az = 0.0
+            elif lighting_pattern_or_alt == "Evening_BackLight":
+                sun_alt = 15.0
+                sun_az = 180.0
+            elif lighting_pattern_or_alt == "Night_Dark":
+                sun_alt = -90.0
+                sun_az = 0.0
+            else:
+                sun_alt = 45.0
+                sun_az = 0.0
+        else:
+            sun_alt = float(lighting_pattern_or_alt)
+            sun_az = 0.0
+
         self.current_weather = {
             'sun_altitude_angle': sun_alt,
+            'sun_azimuth_angle': sun_az,
             'precipitation': precip,
             'fog_density': fog
         }
@@ -494,6 +512,7 @@ class CameraOnlyExperiment:
                 import carla
                 weather = self.world.get_weather()
                 weather.sun_altitude_angle = sun_alt
+                weather.sun_azimuth_angle = sun_az
                 weather.precipitation = precip
                 weather.fog_density = fog
                 weather.precipitation_deposits = precip
