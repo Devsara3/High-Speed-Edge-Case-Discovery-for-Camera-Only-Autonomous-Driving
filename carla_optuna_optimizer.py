@@ -41,8 +41,8 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         start_time = time.time()
         
         # 探索空間の設定
-        # マップ1(正午:順光), マップ2(夕方:逆光), マップ3(夜間:暗闇)
-        lighting_pattern = trial.suggest_categorical("lighting_pattern", ["Noon_FrontLight", "Evening_BackLight", "Night_Dark"])
+        # 太陽の高さ: -90(夜間) 〜 90(真昼) の全範囲を連続的に探索
+        sun_altitude_angle = trial.suggest_float("sun_altitude_angle", -90.0, 90.0)
         precipitation = trial.suggest_float("precipitation", 0.0, 100.0)
         fog_density = trial.suggest_float("fog_density", 0.0, 100.0)
         
@@ -52,7 +52,7 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
         edge_case_img_file = ""
         try:
             # 天候適用
-            experiment.set_weather_params(lighting_pattern, precipitation, fog_density)
+            experiment.set_weather_params(sun_altitude_angle, precipitation, fog_density)
             
             # シナリオの実行
             if scenario_name == 'sequence':
@@ -88,10 +88,10 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
             if max_gap > worst_gap:
                 worst_gap = max_gap
                 print(f"\n--> [NEW WORST GAP DISCOVERED] Gap: {max_gap:.4f} | MinDist: {min_dist:.2f}m | Collisions: {collisions}")
-                print(f"    Params: Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
+                print(f"    Params: Sun={sun_altitude_angle:.1f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
             else:
                 print(f"\n--> [TRIAL {trial.number}] Gap: {max_gap:.4f} | MinDist: {min_dist:.2f}m | Collisions: {collisions}")
-                print(f"    Params: Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
+                print(f"    Params: Sun={sun_altitude_angle:.1f}, Rain={precipitation:.2f}, Fog={fog_density:.2f}\n")
                 
         finally:
             experiment.shutdown()
