@@ -726,7 +726,7 @@ class CameraOnlyExperiment:
                 seg_img = np.zeros((720, 1280, 4), dtype=np.uint8)
             else:
                 # ユーザーの要望により、本番シミュレーション時に1度だけ左右のステレオ画像を保存
-                if self.scenario_ticks == 10 and not self.demo_mode:
+                if self.scenario_ticks == 50 and not self.demo_mode:
                     import cv2
                     import os
                     os.makedirs('results', exist_ok=True)
