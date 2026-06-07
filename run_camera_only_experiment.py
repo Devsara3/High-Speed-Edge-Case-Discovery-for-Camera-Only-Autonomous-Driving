@@ -724,6 +724,15 @@ class CameraOnlyExperiment:
                 image_right = np.zeros((720, 1280, 3), dtype=np.uint8)
                 depth_img = np.zeros((720, 1280, 4), dtype=np.uint8)
                 seg_img = np.zeros((720, 1280, 4), dtype=np.uint8)
+            else:
+                # ユーザーの要望により、本番シミュレーション時に1度だけ左右のステレオ画像を保存
+                if self.scenario_ticks == 10 and not self.demo_mode:
+                    import cv2
+                    import os
+                    os.makedirs('results', exist_ok=True)
+                    cv2.imwrite('results/carla_stereo_left.jpg', image_left)
+                    cv2.imwrite('results/carla_stereo_right.jpg', image_right)
+                    print("[INFO] Saved a pair of raw stereo images from CARLA simulation to results/carla_stereo_left.jpg and right.jpg")
             
             # 2. 縺薙・繝輔Ξ繝ｼ繝縺ｫ縺翫￠繧区怙譁ｰ縺ｮ迚ｩ逅・憾諷九ｒ蜿門ｾ励☆繧・            # 縺薙ｌ縺ｫ繧医ｊ縲∝叙蠕励＠縺溽判蜒上→迚ｩ逅・憾諷九′螳悟・縺ｫ蜷後§繝輔Ξ繝ｼ繝ID (self.next_frame_id) 縺ｮ繧ゅ・縺ｧ蜷梧悄縺吶ｋ・・
             ego_transform = self.ego_vehicle.get_transform()
