@@ -195,7 +195,6 @@ class YoloEvaluator:
                     
                     dist_stereo = float('inf')
                     dist_ai = float('inf')
-                    dist_pinhole = float('inf')
                     
                     z_dist = float('inf')
                     
@@ -226,22 +225,7 @@ class YoloEvaluator:
                         except Exception as ex:
                             pass
                             
-                    # 2. ピンホールカメラ幾何学による推定
-                    w_pixel = float(box.xywh[0][2])
-                    real_width = 1.8
-                    if class_name == 'pedestrian':
-                        real_width = 0.5
-                    elif class_name == 'traffic_light':
-                        real_width = 0.3
-                    elif class_name == 'construction_signal':
-                        real_width = 0.8
-                        
-                    if w_pixel > 1.0:
-                        dist_pinhole = (focal_length * real_width) / w_pixel
-                    
-                    if np.isinf(z_dist):
-                        z_dist = dist_pinhole
-                            
+
                     # 逆投影によるカメラ座標基準の相対3D座標 [X, Y, Z] の算出
                     if not np.isinf(z_dist):
                         u_c = float(box.xywh[0][0])
@@ -258,7 +242,6 @@ class YoloEvaluator:
                         'z_distance': z_dist, # 代表距離 (フュージョン前)
                         'dist_stereo': dist_stereo,
                         'dist_ai': dist_ai,
-                        'dist_pinhole': dist_pinhole,
                         'yolo3d_rel_pos': yolo3d_rel_pos,
                         'traffic_light_color': tl_color,
                         'bbox': (x1, y1, x2, y2),

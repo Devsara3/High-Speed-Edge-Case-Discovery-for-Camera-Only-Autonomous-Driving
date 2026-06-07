@@ -11,7 +11,7 @@ import cv2
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from hsc_emulator import HSCEmulator
+
 
 # リスク計算クラスとYOLO評価器の読み込みｿ
 from risk_calculator import RiskCalculator
@@ -34,7 +34,7 @@ class CameraOnlyExperiment:
         self.record_video = record_video
         self.video_frames = []
         self.evaluator = YoloEvaluator()
-        self.hsc_emulator = HSCEmulator()
+        
         self.risk_calculator = RiskCalculator()
         self.camera_type = 'RGB' # 繝・ヵ繧ｩ繝ｫ繝医・RGB
         self.actors = []
@@ -301,7 +301,7 @@ class CameraOnlyExperiment:
         self.camera_right.listen(_on_camera_capture_right)
         
         # --- 3. 繝輔Ν繧ｻ繝ｳ繧ｵ繝ｼ・・SC逕ｨ縺ｮ霑ｽ蜉繧ｻ繝ｳ繧ｵ繝ｼ ---
-        lidar_bp = self.blueprint_library.find('sensor.lidar.ray_cast')
+        lidar_bp = self.blueprint_library.find('sensor.lidar.ray_cast_semantic')
         lidar_bp.set_attribute('range', '50.0')
         lidar_bp.set_attribute('channels', '32')
         lidar_bp.set_attribute('points_per_second', '56000')
@@ -706,17 +706,6 @@ class CameraOnlyExperiment:
                 depth_img = np.zeros((720, 1280, 4), dtype=np.uint8)
                 seg_img = np.zeros((720, 1280, 4), dtype=np.uint8)
             
-            # --- HSC蜷域・ ---
-
-            if hasattr(self, 'hsc_emulator') and depth_img is not None and seg_img is not None:
-                try:
-                    hsc_image = self.hsc_emulator.synthesize(image_left, depth_img, seg_img)
-                except AttributeError:
-                    hsc_image = image_left
-            else:
-                hsc_image = image_left
-                
-                
             # 2. 縺薙・繝輔Ξ繝ｼ繝縺ｫ縺翫￠繧区怙譁ｰ縺ｮ迚ｩ逅・憾諷九ｒ蜿門ｾ励☆繧・            # 縺薙ｌ縺ｫ繧医ｊ縲∝叙蠕励＠縺溽判蜒上→迚ｩ逅・憾諷九′螳悟・縺ｫ蜷後§繝輔Ξ繝ｼ繝ID (self.next_frame_id) 縺ｮ繧ゅ・縺ｧ蜷梧悄縺吶ｋ・・
             ego_transform = self.ego_vehicle.get_transform()
             ego_pos = [ego_transform.location.x, ego_transform.location.y, ego_transform.location.z]
@@ -759,44 +748,22 @@ class CameraOnlyExperiment:
             
             yolo_detections = self.evaluator.evaluate_multi(image_left, image_right=image_right, ego_speed=ego_vel[0])
             
-            # --- HSC ---
-            current_fog = getattr(self, 'current_weather', {}).get('fog_density', 0.0)
-            
-            # ハザードとの正確な物理直線距離の取得
-            if hasattr(self, 'target_actor') and self.target_actor and self.target_actor.is_alive:
-                dist_gt_hsc = self.ego_vehicle.get_transform().location.distance(self.target_actor.get_transform().location)
-            else:
-                dist_gt_hsc = -1.0  # 未出現時
-
-            # ====================================================
-            # 🔥 【HSC完全統合】物理透過シミュレーションモデルの実行
-            # ====================================================
-            dist_hsi = float('inf')
-            if hasattr(self, 'hsc_emulator'):
-                dist_hsi = self.hsc_emulator.estimate_distance_from_image(current_fog, dist_gt_hsc)
-            # ==================================================
             image = image_left.copy() if image_left is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
             
             gt_obstacles = []
             
-            # --- LiDAR Projection & Radar Extraction ---
-            projected_lidar = []
-
+            # --- Semantic LiDAR Processing ---
+            global_dist_lidar = None
             if not self.demo_mode and lidar_data is not None:
-                lidar_points = np.frombuffer(lidar_data.raw_data, dtype=np.float32).reshape((-1, 4))
-                # 3D遨ｺ髢薙・LiDAR轤ｹ鄒､繧偵き繝｡繝ｩ縺ｮ2D逕ｻ蜒丞ｹｳ髱｢縺ｫ謚募ｽｱ (f=448.1, cx=640, cy=360)
-                for pt in lidar_points:
-                    x, y, z, _ = pt
-
-                    if x > 0.5: # 蜑肴婿縺ｮ縺ｿ
-                        u = int((y * 448.1) / x + 640)
-                        v = int((-z * 448.1) / x + 360)
-
-                        if 0 <= u < 1280 and 0 <= v < 720:
-                            projected_lidar.append((u, v, x))
-                            # 謠冗判逕ｨ (蟆上＆縺冗ｷ代〒謇薙▽)
-                            cv2.circle(image, (u, v), 1, (0, 255, 0), -1)
-
+                dtype = np.dtype([
+                    ('x', np.float32), ('y', np.float32), ('z', np.float32),
+                    ('cos_inc_angle', np.float32), ('object_idx', np.uint32), ('object_tag', np.uint32)
+                ])
+                lidar_array = np.frombuffer(lidar_data.raw_data, dtype=dtype)
+                # Filter points matching Pedestrian (4) or Vehicles (10)
+                valid_points = lidar_array[(lidar_array['object_tag'] == 4) | (lidar_array['object_tag'] == 10)]
+                if len(valid_points) > 0:
+                    global_dist_lidar = float(np.median(valid_points['x']))
 
             if radar_data is not None:
                 radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32).reshape((-1, 4))
@@ -948,59 +915,41 @@ class CameraOnlyExperiment:
         # 4. 遨ｺ髢薙そ繝ｳ繧ｵ繝ｼ繝輔Η繝ｼ繧ｸ繝ｧ繝ｳ縺ｨ繝ｪ繧ｹ繧ｯ縺ｮ險育ｮ・
         measured_class = 'unknown'
         fused_dist = float('inf')
-        global_dist_lidar = float('inf')
-        global_dist_camera = float('inf')
         global_dist_stereo = float('inf')
         global_dist_ai = float('inf')
-        global_dist_hsi = float('inf')
         
-        # YOLO縺ｮ蜷・ヰ繧ｦ繝ｳ繝・ぅ繝ｳ繧ｰ繝懊ャ繧ｯ繧ｹ蜀・〒縲´iDAR縺ｨStereo縺ｮ遨ｺ髢薙ヵ繝･繝ｼ繧ｸ繝ｧ繝ｳ繧貞ｮ溯｡・
+        if not self.demo_mode:
+            # 1. LiDAR距離を最優先で使用
+            if global_dist_lidar is not None:
+                fused_dist = global_dist_lidar
+                measured_class = 'obstacle' # LiDAR単体ではクラス判別が難しいので汎用タグ
+        else:
+            global_dist_lidar = None
+        
+        # 2. YOLOからの各カメラ距離抽出
         for det in yolo_detections:
             stereo_d = det.get('z_distance', float('inf'))
             actual_stereo = det.get('dist_stereo', float('inf'))
             actual_ai = det.get('dist_ai', float('inf'))
-            lidar_d = float('inf')
-
             
             if 'bbox' in det:
                 x1, y1, x2, y2 = det['bbox']
-                # 譫蜀・・LiDAR轤ｹ繧呈歓蜃ｺ
-                lidar_in_box = [pt[2] for pt in projected_lidar if x1 <= pt[0] <= x2 and y1 <= pt[1] <= y2]
-
-                if len(lidar_in_box) > 0:
-                    lidar_d = np.median(lidar_in_box)
-                
-                # 繧ｹ繝槭・繝医・繝輔Η繝ｼ繧ｸ繝ｧ繝ｳ
-
-                if not np.isinf(lidar_d) and not np.isinf(stereo_d):
-                    # LiDAR縺ｨStereo縺ｮ蟾ｮ縺悟ｰ上＆縺代ｌ縺ｰ・医∪縺溘・繧ｫ繝｡繝ｩ縺碁□縺吶℃縺ｦLiDAR縺瑚ｿ代＞蝣ｴ蜷医・髮ｨ邊偵・蜿ｯ閭ｽ諤ｧ縺ゅｊ・・
-                    if abs(lidar_d - stereo_d) < 5.0 or (lidar_d > 3.0):
-                        final_d = lidar_d # 鬮倡ｲｾ蠎ｦ縺ｪLiDAR繧剃ｿ｡逕ｨ
-                    else:
-                        final_d = stereo_d # LiDAR縺ｮ霑第磁繝弱う繧ｺ(繧ｴ繝ｼ繧ｹ繝・縺ｨ縺励※譽・唆縺励ヾtereo繧剃ｿ｡逕ｨ
-                elif not np.isinf(lidar_d):
-                    final_d = lidar_d
-                else:
-                    final_d = stereo_d
-                
-                det['fused_distance'] = final_d
-                det['lidar_distance'] = lidar_d
-                
-                # 謠冗判 (HUD)
+                # 描画 (HUD)
                 cv2.rectangle(image, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                text = f"{det['class']} Fused:{final_d:.1f}m (L:{lidar_d:.1f}/C:{stereo_d:.1f})"
+                text = f"{det['class']} C:{stereo_d:.1f}"
                 cv2.putText(image, text, (x1, max(y1 - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-
                 
-                if final_d < fused_dist:
-                    fused_dist = final_d
+                # YOLOがLiDARより近い障害物を見つけた場合や、LiDARが欠損している場合はカメラ情報を信用
+                if stereo_d < fused_dist:
+                    fused_dist = stereo_d
                     measured_class = det['class']
-                    global_dist_lidar = lidar_d
-                    global_dist_camera = stereo_d
+                
+                # 最も近いオブジェクトの情報を記録
+                if actual_stereo < global_dist_stereo:
                     global_dist_stereo = actual_stereo
+                if actual_ai < global_dist_ai:
                     global_dist_ai = actual_ai
-                    global_dist_hsi = dist_hsi
-                    
+
         dist_for_risk = fused_dist if fused_dist != float('inf') else 100.0
         
         r_fusion, info = self.risk_calculator.calculate_fusion_risk(
@@ -1058,10 +1007,8 @@ class CameraOnlyExperiment:
             'worst_obstacle': measured_class,
             'fusion_distance': dist_for_risk,
             'dist_lidar': global_dist_lidar,
-            'dist_camera': global_dist_camera,
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
-            'dist_hsi': global_dist_hsi,
             'dist_gt': dist_gt,
             'v_approach': measured_rel_vel,
             'r_fusion': r_fusion,
@@ -1110,7 +1057,9 @@ class CameraOnlyExperiment:
         # HUDのテキスト描画と動画保存
         cv2.putText(image, f"Risk: {r_fusion:.2f} | Gap: {gap:.2f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255) if r_fusion > 1.0 else (0, 255, 0), 2)
         cv2.putText(image, f"Action: {'Brake' if accel_cmd < 0 else 'Cruise'} | Steer: {steer_cmd:.2f}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
-        cv2.putText(image, f"Dist (L/C/F): {global_dist_lidar:.1f} / {global_dist_camera:.1f} / {fused_dist:.1f}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        lidar_str = f"{global_dist_lidar:.1f}" if global_dist_lidar is not None else "None"
+        cam_str = f"{global_dist_stereo:.1f}" if global_dist_stereo != float('inf') else "inf"
+        cv2.putText(image, f"Dist (L/S/F): {lidar_str} / {cam_str} / {fused_dist:.1f}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
         
         if hasattr(self, 'video_writer'):

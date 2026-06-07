@@ -24,8 +24,12 @@ def run_optuna_search(n_trials=5, sampler_name='TPE', scenario_name='sequence', 
     os.makedirs("results", exist_ok=True)
     global_run_id = time.strftime("%Y%m%d_%H%M%S")
     
-    print("  => Using TPE Sampler (Optimization enabled).")
-    sampler = optuna.samplers.TPESampler(seed=None)
+    if sampler_name == 'Random':
+        print("  => Using Random Sampler.")
+        sampler = optuna.samplers.RandomSampler(seed=None)
+    else:
+        print("  => Using TPE Sampler (Optimization enabled).")
+        sampler = optuna.samplers.TPESampler(seed=None)
         
     study = optuna.create_study(direction="maximize", sampler=sampler)
     history = []
