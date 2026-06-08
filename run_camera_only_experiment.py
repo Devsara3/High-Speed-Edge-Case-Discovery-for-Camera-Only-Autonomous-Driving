@@ -794,11 +794,10 @@ class CameraOnlyExperiment:
                 
                 valid_points = lidar_array[mask_tag & mask_front]
                 if len(valid_points) > 0:
-                    # ノイズ対策として一番手前(5%)と全体の中央値(50%)を重み付けでブレンド
-                    # 手前を重視しつつ、極端な外れ値のノイズにも強くなる（手前:70%, 中央値:30%）
+                    # 手前(5%)を80%、中央値を20%の重みでブレンド
                     p5 = np.percentile(valid_points['x'], 5)
                     p50 = np.median(valid_points['x'])
-                    global_dist_lidar = float(0.7 * p5 + 0.3 * p50)
+                    global_dist_lidar = float(0.8 * p5 + 0.2 * p50)
 
             if radar_data is not None:
                 radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32).reshape((-1, 4))
@@ -1041,7 +1040,7 @@ class CameraOnlyExperiment:
             'ego_vx': ego_vel[0],
             'worst_obstacle': measured_class,
             'fusion_distance': dist_for_risk,
-            'dist_lidar': global_dist_lidar if global_dist_lidar is not None else float('inf'),
+            'dist_lidar': global_dist_lidar,
             'dist_stereo': global_dist_stereo,
             'dist_ai': global_dist_ai,
             'dist_gt': dist_gt,
