@@ -788,7 +788,12 @@ class CameraOnlyExperiment:
                 ])
                 lidar_array = np.frombuffer(lidar_data.raw_data, dtype=dtype)
                 # YOLOに依存せず、前方の車や人だけを捉えるための空間フィルタリング
-                mask_tag = (lidar_array['object_tag'] == 4) | (lidar_array['object_tag'] == 10)
+                if getattr(self, 'current_scenario', 'unknown') == 'A':
+                    mask_tag = (lidar_array['object_tag'] == 4)  # 人だけ
+                elif getattr(self, 'current_scenario', 'unknown') in ['B', 'C']:
+                    mask_tag = (lidar_array['object_tag'] == 10) # 車だけ
+                else:
+                    mask_tag = (lidar_array['object_tag'] == 4) | (lidar_array['object_tag'] == 10)
                 # 横幅の制限をなくし（視野全体）、自車至近距離のノイズ(X<0.5)のみを除外
                 mask_front = (lidar_array['x'] > 0.5)
                 
