@@ -11,6 +11,7 @@ class MockCarlaEnv:
         self.base_image = cv2.imread(base_image_path)
         if self.base_image is None:
             raise FileNotFoundError(f"Base image not found at {base_image_path}")
+        self.base_image = cv2.resize(self.base_image, (1280, 720))
         
         # 初期化
         self.reset()

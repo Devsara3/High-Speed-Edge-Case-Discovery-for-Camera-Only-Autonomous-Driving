@@ -1139,12 +1139,25 @@ class CameraOnlyExperiment:
         
         # 7. 繧ｷ繝翫Μ繧ｪ螳御ｺ・け繝ｪ繧｢蛻､螳・
         if scenario_name == 'A':
-
-            if len(gt_obstacles) > 0:
+            if self.scenario_ticks > 180:
+                self.clear_flag = True
+            elif len(gt_obstacles) > 0:
                 p_pos = gt_obstacles[0]['pos']
 
-                if p_pos[1] <= -2.5 or travel_dist >= 32.0:
+                if travel_dist >= 32.0:
                     self.clear_flag = True
+                else:
+                    if getattr(self, 'demo_mode', False):
+                        if p_pos[1] <= -2.5:
+                            self.clear_flag = True
+                    elif hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None:
+                        ego_tf = self.ego_vehicle.get_transform()
+                        right_vec = ego_tf.get_right_vector()
+                        dx = p_pos[0] - ego_pos[0]
+                        dy = p_pos[1] - ego_pos[1]
+                        rel_y = dx * right_vec.x + dy * right_vec.y
+                        if rel_y >= 2.5:
+                            self.clear_flag = True
             else:
                 self.clear_flag = True
                 
