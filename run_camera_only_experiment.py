@@ -789,13 +789,16 @@ class CameraOnlyExperiment:
                 lidar_array = np.frombuffer(lidar_data.raw_data, dtype=dtype)
                 # YOLOに依存せず、前方の車や人だけを捉えるための空間フィルタリング
                 mask_tag = (lidar_array['object_tag'] == 4) | (lidar_array['object_tag'] == 10)
-                # 前方のレーン幅(約4m以内: Yが-2.0～2.0)、かつ自車至近距離のノイズ(X<0.5)を除外
-                mask_front = (lidar_array['x'] > 0.5) & (np.abs(lidar_array['y']) < 2.0)
+                # 左右3m(幅6m)に変更し、自車至近距離のノイズ(X<0.5)を除外
+                mask_front = (lidar_array['x'] > 0.5) & (np.abs(lidar_array['y']) < 3.0)
                 
                 valid_points = lidar_array[mask_tag & mask_front]
                 if len(valid_points) > 0:
-                    # 全ての中央値ではなく、一番近い障害物までの距離を取得(外れ値対策で5パーセンタイル)
-                    global_dist_lidar = float(np.percentile(valid_points['x'], 5))
+                    # ノイズ対策として一番手前(5%)と全体の中央値(50%)を重み付けでブレンド
+                    # 手前を重視しつつ、極端な外れ値のノイズにも強くなる（手前:70%, 中央値:30%）
+                    p5 = np.percentile(valid_points['x'], 5)
+                    p50 = np.median(valid_points['x'])
+                    global_dist_lidar = float(0.7 * p5 + 0.3 * p50)
 
             if radar_data is not None:
                 radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32).reshape((-1, 4))
