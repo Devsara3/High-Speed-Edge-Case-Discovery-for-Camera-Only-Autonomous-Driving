@@ -727,7 +727,6 @@ class CameraOnlyExperiment:
             else:
                 # ユーザーの要望により、本番シミュレーション時に1度だけ左右のステレオ画像を保存
                 if self.scenario_ticks == 50 and not self.demo_mode:
-                    import cv2
                     import os
                     os.makedirs('results', exist_ok=True)
                     cv2.imwrite('results/carla_stereo_left.jpg', image_left)
