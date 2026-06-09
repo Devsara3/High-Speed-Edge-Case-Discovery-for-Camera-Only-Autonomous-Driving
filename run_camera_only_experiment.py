@@ -343,8 +343,17 @@ class CameraOnlyExperiment:
         self.actors.append(self.seg_cam)
 
         
-        def _on_lidar(data): self.lidar_queue.put((data.frame, data))
-        def _on_radar(data): self.radar_queue.put((data.frame, data))
+        def _on_lidar(data):
+            dtype = np.dtype([
+                ('x', np.float32), ('y', np.float32), ('z', np.float32),
+                ('cos_inc_angle', np.float32), ('object_idx', np.uint32), ('object_tag', np.uint32)
+            ])
+            array = np.frombuffer(data.raw_data, dtype=dtype).copy()
+            self.lidar_queue.put((data.frame, array))
+            
+        def _on_radar(data):
+            array = np.frombuffer(data.raw_data, dtype=np.float32).copy().reshape((-1, 4))
+            self.radar_queue.put((data.frame, array))
         def _on_depth(image):
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
@@ -433,9 +442,21 @@ class CameraOnlyExperiment:
         for _ in range(5):
             self.world.tick()
 
-        # 鬥ｴ譟薙∪縺帷畑tick縺ｧ繧ｭ繝･繝ｼ縺ｫ貅懊∪縺｣縺溷商縺・判蜒上ｒ縺吶∋縺ｦ蜿悶ｊ蜃ｺ縺励※遐ｴ譽・☆繧・
+        # 5回のtickで発生した全センサーの5フレーム分を確実に消費して捨てる
+        import queue
+        all_queues = [
+            self.image_queue_left, self.image_queue_right, 
+            self.lidar_queue, self.radar_queue, 
+            self.depth_queue, self.seg_queue
+        ]
+        for _ in range(5):
+            for q in all_queues:
+                try:
+                    q.get(timeout=2.0)
+                except queue.Empty:
+                    pass
         
-        # 譛€蛻昴・繧ｹ繝・ャ繝励・縺溘ａ縺ｫ縲∵怙蛻昴・ world.tick() 繧貞他繧薙〒縺翫￥
+        # 譛€蛻昴・繧ｹ繝・ャ繝励・縺溘ａ縲∵怙蛻昴・ world.tick() 繧貞他繧薙〒縺翫￥
         self.next_frame_id = self.world.tick()
         
         # 譌∬ｧり€・ｧ・ｧ抵ｼ夊ｽｦ蟆ｾ蜷惹ｸ頑婿
@@ -801,11 +822,7 @@ class CameraOnlyExperiment:
             # --- Semantic LiDAR Processing ---
             global_dist_lidar = None
             if not self.demo_mode and lidar_data is not None:
-                dtype = np.dtype([
-                    ('x', np.float32), ('y', np.float32), ('z', np.float32),
-                    ('cos_inc_angle', np.float32), ('object_idx', np.uint32), ('object_tag', np.uint32)
-                ])
-                lidar_array = np.frombuffer(lidar_data.raw_data, dtype=dtype)
+                lidar_array = lidar_data
                 # YOLOに依存せず、前方の車や人だけを捉えるための空間フィルタリング
                 if getattr(self, 'current_scenario', 'unknown') == 'A':
                     mask_tag = (lidar_array['object_tag'] == 4)  # 人だけ
@@ -824,7 +841,7 @@ class CameraOnlyExperiment:
                     global_dist_lidar = float(0.80 * sorted_x[0] + 0.20 * top5_mean)
 
             if radar_data is not None:
-                radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32).reshape((-1, 4))
+                radar_points = radar_data
                 front_radar = radar_points[np.abs(radar_points[:, 1]) < 0.1]
 
                 if len(front_radar) > 0:
