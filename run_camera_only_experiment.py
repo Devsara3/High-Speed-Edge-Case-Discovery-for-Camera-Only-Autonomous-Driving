@@ -456,20 +456,45 @@ class CameraOnlyExperiment:
         self.world.get_spectator().set_transform(carla.Transform(spec_loc, spec_rot))
 
     def _destroy_actors(self):
-        if hasattr(self, 'camera') and self.camera is not None:
-            self.camera.stop()
+        # 確実にすべてのセンサーストリームを停止し、ゾンビ化を防ぐ
+        sensors = ['camera', 'camera_left', 'camera_right', 'lidar', 'radar', 'depth_cam', 'seg_cam']
+        for s in sensors:
+            if hasattr(self, s):
+                sensor = getattr(self, s)
+                if sensor is not None and getattr(sensor, 'is_alive', False):
+                    try:
+                        sensor.stop()
+                    except:
+                        pass
+        
         for actor in self.actors:
-            if actor is not None and actor.is_alive:
-                actor.destroy()
+            if actor is not None and getattr(actor, 'is_alive', False):
+                try:
+                    actor.destroy()
+                except:
+                    pass
         self.actors = []
+        
         if hasattr(self, 'target_actor') and self.target_actor is not None and getattr(self.target_actor, 'is_alive', False):
-            self.target_actor.destroy()
+            try:
+                self.target_actor.destroy()
+            except:
+                pass
         self.target_actor = None
+        
         if hasattr(self, 'ego_vehicle') and self.ego_vehicle is not None and getattr(self.ego_vehicle, 'is_alive', False):
-            self.ego_vehicle.destroy()
+            try:
+                self.ego_vehicle.destroy()
+            except:
+                pass
         self.ego_vehicle = None
-        self.camera = None
-        print("[INFO] Cleaned up actors.")
+        
+        # 参照のクリア
+        for s in sensors:
+            if hasattr(self, s):
+                setattr(self, s, None)
+                
+        print("[INFO] Cleaned up actors and stopped all sensor streams.")
 
 
     def set_weather_params(self, lighting_pattern_or_alt, precip, fog):
