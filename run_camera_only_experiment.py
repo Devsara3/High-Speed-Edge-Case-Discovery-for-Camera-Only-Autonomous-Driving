@@ -836,9 +836,7 @@ class CameraOnlyExperiment:
                 valid_points = lidar_array[mask_tag & mask_front]
                 if len(valid_points) > 0:
                     sorted_x = np.sort(valid_points['x'])
-                    # 1発だけのノイズ対策: 最小値(80%)と上位5点の平均(20%)のブレンド
-                    top5_mean = np.mean(sorted_x[:5])
-                    global_dist_lidar = float(0.80 * sorted_x[0] + 0.20 * top5_mean)
+                    global_dist_lidar = float(sorted_x[0])
 
             if radar_data is not None:
                 radar_points = radar_data
@@ -1480,6 +1478,7 @@ class CameraOnlyExperiment:
             scenario_phase = 0
             tick = 0
             c_spawned = False  # delayed spawn flag for C
+            phase1_start_tick = 0
             
             while True:
                 tick += 1
@@ -1522,12 +1521,13 @@ class CameraOnlyExperiment:
                                 self.target_actor = None
                             consecutive_stopped_ticks = 0
                             scenario_phase = 1
+                            phase1_start_tick = tick
                         elif scenario_phase == 2:
                             print(f"[Tick {tick}] Scenario {seq} | FULL SEQUENCE SUCCESS.")
                             break
                             
-                    if scenario_phase == 1 and ego_speed > 5.0:
-                        print(f"[Tick {tick}] Scenario {seq} | Ego resumed. Spawning Phase 2 obstacle.")
+                    if scenario_phase == 1 and (tick - phase1_start_tick) >= 40:
+                        print(f"[Tick {tick}] Scenario {seq} | Empty period finished (40 ticks). Spawning Phase 2 obstacle.")
                         try:
                             import carla
                             ego_tf = self.ego_vehicle.get_transform()
