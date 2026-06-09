@@ -823,17 +823,12 @@ class CameraOnlyExperiment:
             global_dist_lidar = None
             if not self.demo_mode and lidar_data is not None:
                 lidar_array = lidar_data
-                # YOLOに依存せず、前方の車や人だけを捉えるための空間フィルタリング
-                if getattr(self, 'current_scenario', 'unknown') == 'A':
-                    mask_tag = (lidar_array['object_tag'] == 4)  # 人だけ
-                elif getattr(self, 'current_scenario', 'unknown') in ['B', 'C']:
-                    mask_tag = (lidar_array['object_tag'] == 10) # 車だけ
-                else:
-                    mask_tag = (lidar_array['object_tag'] == 4) | (lidar_array['object_tag'] == 10)
-                # 横幅の制限をなくし（視野全体）、自車至近距離のノイズ(X<0.5)のみを除外
-                mask_front = (lidar_array['x'] > 0.5)
+                # タグを完全に無視し、自車の「真正面にある物体」を空間的に抽出する
+                mask_x = (lidar_array['x'] > 1.5) & (lidar_array['x'] < 60.0)  # 自車ボンネットを除外し、60m先まで
+                mask_y = np.abs(lidar_array['y']) < 2.0                        # 車線幅（左右2m）
+                mask_z = lidar_array['z'] > -1.8                               # 地面（道路）を除外（センサーから下方向）
                 
-                valid_points = lidar_array[mask_tag & mask_front]
+                valid_points = lidar_array[mask_x & mask_y & mask_z]
                 if len(valid_points) > 0:
                     sorted_x = np.sort(valid_points['x'])
                     global_dist_lidar = float(sorted_x[0])
