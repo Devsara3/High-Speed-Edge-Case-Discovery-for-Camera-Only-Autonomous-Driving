@@ -800,8 +800,10 @@ class CameraOnlyExperiment:
                 
                 valid_points = lidar_array[mask_tag & mask_front]
                 if len(valid_points) > 0:
-                    # 点数の偏りに影響されないよう、全有効点の中の「絶対的な最小値(一番近い点)」を距離とする
-                    global_dist_lidar = float(np.min(valid_points['x']))
+                    sorted_x = np.sort(valid_points['x'])
+                    # 1発だけのノイズ対策: 最小値(80%)と上位5点の平均(20%)のブレンド
+                    top5_mean = np.mean(sorted_x[:5])
+                    global_dist_lidar = float(0.80 * sorted_x[0] + 0.20 * top5_mean)
 
             if radar_data is not None:
                 radar_points = np.frombuffer(radar_data.raw_data, dtype=np.float32).reshape((-1, 4))
