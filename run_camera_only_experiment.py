@@ -1288,26 +1288,97 @@ class CameraOnlyExperiment:
         else:
             self._setup_real_scenario(scenario_name, target_speed_kph, gap, deceleration)
             
+        scenario_phase = 0
+        phase1_start_tick = 0
+        self.consecutive_stopped_ticks = 0
+
         for tick in range(max_ticks):
             log = self.run_step(scenario_name, target_speed_kph)
 
-            
             if tick % 10 == 0:
                 print(f"Step {log['scenario_ticks']}: Ego X={log['ego_x']:.1f}m, Y={log['ego_y']:.2f}m, Vx={log['ego_vx']*3.6:.1f}km/h | worst={log['worst_obstacle']} | Gap={log['perception_gap']:.2f} (GT={log['r_gt']:.2f}, Perc={log['r_perceived']:.2f}) | mu_perc={log['mu_perceived']:.1f}, mu_gt={log['mu_gt']:.1f}")
 
-                
             if self.clear_flag:
-                print(f"--> Scenario {scenario_name} CLEARED at Step {tick}!")
-                
-                if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
-                    print(f"--> Destroying obstacle and adding 40 ticks of empty time (GT=-1)...")
-                    self.target_actor.destroy()
-                    self.target_actor = None
-                
-                for _ in range(40):
-                    self.run_step(scenario_name, target_speed_kph)
+                if scenario_phase == 0:
+                    print(f"--> Phase 1 {scenario_name} CLEARED at Step {tick}! Destroying obstacle.")
+                    if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
+                        self.target_actor.destroy()
+                        self.target_actor = None
+                    self.clear_flag = False
+                    self.consecutive_stopped_ticks = 0
+                    scenario_phase = 1
+                    phase1_start_tick = tick
+                elif scenario_phase == 2:
+                    print(f"--> Phase 2 {scenario_name} CLEARED at Step {tick}! FULL TRIAL SUCCESS.")
+                    break
+
+            if scenario_phase == 1 and (tick - phase1_start_tick) >= 40:
+                print(f"--> Empty period finished (40 ticks). Spawning Phase 2 obstacle for {scenario_name}.")
+                try:
+                    import carla
+                    ego_tf = self.ego_vehicle.get_transform()
+                    fwd = ego_tf.get_forward_vector()
+                    ego_right = ego_tf.get_right_vector()
+                    car_loc = ego_tf.location + fwd * 30.0
+                    car_loc.z += 1.0
+                    rot = ego_tf.rotation
                     
-                break
+                    if scenario_name == 'A':
+                        bp = self.blueprint_library.filter('walker.pedestrian.0001')[0]
+                        ped_loc = ego_tf.location + fwd * 30.0 - ego_right * 3.0
+                        ped_loc.z += 0.5
+                        ped_rot = carla.Rotation(yaw=ego_tf.rotation.yaw + 90.0)
+                        self.target_actor = self._safe_spawn_actor(bp, ped_loc, ped_rot, fwd)
+                        if self.target_actor:
+                            self.actors.append(self.target_actor)
+                            control = carla.WalkerControl()
+                            control.direction = ego_right
+                            control.speed = 1.39
+                            self.target_actor.apply_control(control)
+                    elif scenario_name == 'B':
+                        bp = self.blueprint_library.filter('model3')[0]
+                        self.target_actor = self._safe_spawn_actor(bp, car_loc, rot, fwd)
+                        if self.target_actor:
+                            self.actors.append(self.target_actor)
+                            self.target_actor.set_target_velocity(self.ego_vehicle.get_velocity())
+                            self.lead_decel_ticks = 0
+                            self.lead_decel_started = True
+                            self.lead_deceleration = -9.0
+                    elif scenario_name == 'C':
+                        bp = self.blueprint_library.filter('model3')[0]
+                        c_loc = ego_tf.location + fwd * 35.0 + ego_right * 6.0
+                        c_loc.z += 1.0
+                        c_rot = carla.Rotation(yaw=ego_tf.rotation.yaw - 90.0)
+                        self.target_actor = self._safe_spawn_actor(bp, c_loc, c_rot, fwd)
+                        if self.target_actor:
+                            self.actors.append(self.target_actor)
+                            control = carla.VehicleControl()
+                            control.throttle = 1.0
+                            control.steer = -1.0
+                            self.target_actor.apply_control(control)
+                    elif scenario_name == 'D':
+                        bp = self.blueprint_library.filter('static.prop.constructioncone')[0]
+                        d_loc = ego_tf.location + fwd * 35.0
+                        d_loc.z += 1.0
+                        self.target_actor = self._safe_spawn_actor(bp, d_loc, rot, fwd)
+                        if self.target_actor:
+                            self.actors.append(self.target_actor)
+                    elif scenario_name == 'E':
+                        bp = self.blueprint_library.filter('vehicle.ford.mustang')[0]
+                        e_loc = ego_tf.location + fwd * 35.0 + ego_right * 6.0
+                        e_loc.z += 1.0
+                        e_rot = carla.Rotation(yaw=ego_tf.rotation.yaw - 90.0)
+                        self.target_actor = self._safe_spawn_actor(bp, e_loc, e_rot, fwd)
+                        if self.target_actor:
+                            self.actors.append(self.target_actor)
+                            control = carla.VehicleControl()
+                            control.throttle = 1.0
+                            self.target_actor.apply_control(control)
+                    
+                    if self.target_actor:
+                        scenario_phase = 2
+                except Exception as e:
+                    print(f"Spawn Error at Phase 2: {e}")
 
         self._save_worst_image(scenario_name)
 
