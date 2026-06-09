@@ -1298,6 +1298,15 @@ class CameraOnlyExperiment:
                 
             if self.clear_flag:
                 print(f"--> Scenario {scenario_name} CLEARED at Step {tick}!")
+                
+                if not self.demo_mode and hasattr(self, 'target_actor') and self.target_actor:
+                    print(f"--> Destroying obstacle and adding 40 ticks of empty time (GT=-1)...")
+                    self.target_actor.destroy()
+                    self.target_actor = None
+                
+                for _ in range(40):
+                    self.run_step(scenario_name, target_speed_kph)
+                    
                 break
 
         self._save_worst_image(scenario_name)
