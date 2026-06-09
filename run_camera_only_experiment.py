@@ -103,7 +103,13 @@ class CameraOnlyExperiment:
             self.ego_vehicle = None
             self.camera = None
             self.target_actor = None
-            self.image_queue = queue.Queue()
+            import queue
+            self.image_queue_left = queue.Queue()
+            self.image_queue_right = queue.Queue()
+            self.lidar_queue = queue.Queue()
+            self.radar_queue = queue.Queue()
+            self.depth_queue = queue.Queue()
+            self.seg_queue = queue.Queue()
             
             # 蜷梧悄繝｢繝ｼ繝芽ｨｭ螳・
             self.traffic_manager = self.client.get_trafficmanager()
@@ -275,14 +281,17 @@ class CameraOnlyExperiment:
         # 繧ｭ繝･繝ｼ縺ｮ菴懈・縺ｨ繧ｯ繝ｪ繧｢
         import queue
 
-        if not hasattr(self, 'image_queue_left'):
-            self.image_queue_left = queue.Queue()
-            self.image_queue_right = queue.Queue()
-            
-        while not self.image_queue_left.empty():
-            self.image_queue_left.get()
-        while not self.image_queue_right.empty():
-            self.image_queue_right.get()
+        all_queues = [
+            self.image_queue_left, self.image_queue_right, 
+            self.lidar_queue, self.radar_queue, 
+            self.depth_queue, self.seg_queue
+        ]
+        for q in all_queues:
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
             
         # コールバックで(フレームID, 画像)を格納
         def _on_camera_capture_left(image):
@@ -333,17 +342,6 @@ class CameraOnlyExperiment:
         self.seg_cam = self.world.spawn_actor(seg_bp, camera_transform_left, attach_to=self.ego_vehicle)
         self.actors.append(self.seg_cam)
 
-        
-        if not hasattr(self, 'lidar_queue'):
-            self.lidar_queue = queue.Queue()
-            self.radar_queue = queue.Queue()
-            self.depth_queue = queue.Queue()
-            self.seg_queue = queue.Queue()
-            
-        while not self.lidar_queue.empty(): self.lidar_queue.get()
-        while not self.radar_queue.empty(): self.radar_queue.get()
-        while not self.depth_queue.empty(): self.depth_queue.get()
-        while not self.seg_queue.empty(): self.seg_queue.get()
         
         def _on_lidar(data): self.lidar_queue.put((data.frame, data))
         def _on_radar(data): self.radar_queue.put((data.frame, data))
@@ -436,11 +434,6 @@ class CameraOnlyExperiment:
             self.world.tick()
 
         # 鬥ｴ譟薙∪縺帷畑tick縺ｧ繧ｭ繝･繝ｼ縺ｫ貅懊∪縺｣縺溷商縺・判蜒上ｒ縺吶∋縺ｦ蜿悶ｊ蜃ｺ縺励※遐ｴ譽・☆繧・
-        while not self.image_queue.empty():
-            try:
-                self.image_queue.get_nowait()
-            except queue.Empty:
-                break
         
         # 譛€蛻昴・繧ｹ繝・ャ繝励・縺溘ａ縺ｫ縲∵怙蛻昴・ world.tick() 繧貞他繧薙〒縺翫￥
         self.next_frame_id = self.world.tick()
