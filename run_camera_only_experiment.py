@@ -315,7 +315,7 @@ class CameraOnlyExperiment:
         lidar_bp.set_attribute('channels', '32')
         lidar_bp.set_attribute('points_per_second', '300000')
         lidar_bp.set_attribute('horizontal_fov', '120.0')
-        lidar_bp.set_attribute('rotation_frequency', '10')
+        lidar_bp.set_attribute('rotation_frequency', '20')
         lidar_bp.set_attribute('sensor_tick', '0.0')
         self.lidar = self.world.spawn_actor(lidar_bp, camera_transform_left, attach_to=self.ego_vehicle)
         self.actors.append(self.lidar)
