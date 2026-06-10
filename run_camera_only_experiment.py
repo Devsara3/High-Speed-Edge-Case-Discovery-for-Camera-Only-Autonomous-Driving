@@ -823,12 +823,52 @@ class CameraOnlyExperiment:
             global_dist_lidar = None
             if not self.demo_mode and lidar_data is not None:
                 lidar_array = lidar_data
-                # タグを完全に無視し、自車の「真正面にある物体」を空間的に抽出する
-                mask_x = (lidar_array['x'] > 3.0) & (lidar_array['x'] < 60.0)  # 自車のボディ（3m以内）を完全に無視し、60m先まで
-                mask_y = np.abs(lidar_array['y']) < 2.0                        # 自分の車線幅（左右2m）
-                mask_z = lidar_array['z'] > -1.2                               # ピッチング時の地面（道路）の反射を完全に除外
+                current_scenario = getattr(self, 'current_scenario', 'unknown')
                 
-                valid_points = lidar_array[mask_x & mask_y & mask_z]
+                # 共通の空間フィルター（自車、車線外、地面を物理的に除外）
+                mask_x = (lidar_array['x'] > 3.0) & (lidar_array['x'] < 60.0)
+                mask_y = np.abs(lidar_array['y']) < 2.0
+                mask_z = lidar_array['z'] > -1.2
+                spatial_mask = mask_x & mask_y & mask_z
+                
+                valid_points = np.array([])
+                
+                # シナリオごとのターゲット判定 ＋ 除外フォールバック
+                if current_scenario == 'A':
+                    # Step 1: 正常なタグ(4: 歩行者)を探す
+                    mask_target = (lidar_array['object_tag'] == 4)
+                    valid_points = lidar_array[spatial_mask & mask_target]
+                    
+                    if len(valid_points) == 0:
+                        # Step 2: 見つからなければ（バグ等）、除外方式に切り替える
+                        mask_exclude = (
+                            (lidar_array['object_tag'] != 1) &  # 道路
+                            (lidar_array['object_tag'] != 7) &  # 白線
+                            (lidar_array['object_tag'] != 8) &  # 歩道
+                            (lidar_array['object_tag'] != 10)   # 自車
+                        )
+                        valid_points = lidar_array[spatial_mask & mask_exclude]
+                        
+                elif current_scenario == 'B':
+                    # Step 1: 正常なタグ(10: 車)を探す
+                    mask_target = (lidar_array['object_tag'] == 10)
+                    valid_points = lidar_array[spatial_mask & mask_target]
+                    
+                    if len(valid_points) == 0:
+                        # Step 2: 見つからなければ、除外方式に切り替える
+                        # ターゲット車はバグで0になっているため、10(自車)を除外してもターゲットは消えない
+                        mask_exclude = (
+                            (lidar_array['object_tag'] != 1) &
+                            (lidar_array['object_tag'] != 7) &
+                            (lidar_array['object_tag'] != 8) &
+                            (lidar_array['object_tag'] != 10)
+                        )
+                        valid_points = lidar_array[spatial_mask & mask_exclude]
+                        
+                else:
+                    # その他のシナリオは空間フィルターのみ適用（既存の挙動を維持）
+                    valid_points = lidar_array[spatial_mask]
+
                 if len(valid_points) > 0:
                     # ヒストグラム（密度）によるノイズ除去 (1m間隔の輪切りで5点以上を有効とする)
                     counts, bin_edges = np.histogram(valid_points['x'], bins=np.arange(3.0, 61.0, 1.0))
