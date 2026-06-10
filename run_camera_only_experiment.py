@@ -824,14 +824,16 @@ class CameraOnlyExperiment:
             if not self.demo_mode and lidar_data is not None:
                 lidar_array = lidar_data
                 # タグを完全に無視し、自車の「真正面にある物体」を空間的に抽出する
-                mask_x = (lidar_array['x'] > 1.5) & (lidar_array['x'] < 60.0)  # 自車ボンネットを除外し、60m先まで
-                mask_y = np.abs(lidar_array['y']) < 2.0                        # 車線幅（左右2m）
-                mask_z = lidar_array['z'] > -1.8                               # 地面（道路）を除外（センサーから下方向）
+                mask_x = (lidar_array['x'] > 3.0) & (lidar_array['x'] < 60.0)  # 自車のボディ（3m以内）を完全に無視し、60m先まで
+                mask_y = np.abs(lidar_array['y']) < 2.0                        # 自分の車線幅（左右2m）
+                mask_z = lidar_array['z'] > -1.8                               # 地面（道路）の反射を除外
                 
                 valid_points = lidar_array[mask_x & mask_y & mask_z]
                 if len(valid_points) > 0:
                     sorted_x = np.sort(valid_points['x'])
-                    global_dist_lidar = float(sorted_x[0])
+                    # ノイズ対策：絶対最小値ではなく「近い点トップ10の中央値」を取得（Top-N Median法）
+                    top_n = min(10, len(sorted_x))
+                    global_dist_lidar = float(np.median(sorted_x[:top_n]))
 
             if radar_data is not None:
                 radar_points = radar_data
