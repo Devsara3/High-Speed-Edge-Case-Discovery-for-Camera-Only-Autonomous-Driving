@@ -833,6 +833,9 @@ class CameraOnlyExperiment:
                 
                 valid_points = np.array([])
                 
+                # 背景ノイズを徹底的に除外する強化版タグリスト（道路、建物、壁、白線、歩道、植生、自車、空、地形）
+                exclude_tags = [1, 2, 3, 7, 8, 9, 10, 11, 22]
+                
                 # シナリオごとのターゲット判定 ＋ 除外フォールバック
                 if current_scenario == 'A':
                     # Step 1: 正常なタグ(4: 歩行者)を探す
@@ -840,13 +843,8 @@ class CameraOnlyExperiment:
                     valid_points = lidar_array[spatial_mask & mask_target]
                     
                     if len(valid_points) == 0:
-                        # Step 2: 見つからなければ（バグ等）、除外方式に切り替える
-                        mask_exclude = (
-                            (lidar_array['object_tag'] != 1) &  # 道路
-                            (lidar_array['object_tag'] != 7) &  # 白線
-                            (lidar_array['object_tag'] != 8) &  # 歩道
-                            (lidar_array['object_tag'] != 10)   # 自車
-                        )
+                        # Step 2: 見つからなければ（バグ等）、強化版除外方式に切り替える
+                        mask_exclude = ~np.isin(lidar_array['object_tag'], exclude_tags)
                         valid_points = lidar_array[spatial_mask & mask_exclude]
                         
                 elif current_scenario == 'B':
@@ -855,14 +853,8 @@ class CameraOnlyExperiment:
                     valid_points = lidar_array[spatial_mask & mask_target]
                     
                     if len(valid_points) == 0:
-                        # Step 2: 見つからなければ、除外方式に切り替える
-                        # ターゲット車はバグで0になっているため、10(自車)を除外してもターゲットは消えない
-                        mask_exclude = (
-                            (lidar_array['object_tag'] != 1) &
-                            (lidar_array['object_tag'] != 7) &
-                            (lidar_array['object_tag'] != 8) &
-                            (lidar_array['object_tag'] != 10)
-                        )
+                        # Step 2: 見つからなければ、強化版除外方式に切り替える
+                        mask_exclude = ~np.isin(lidar_array['object_tag'], exclude_tags)
                         valid_points = lidar_array[spatial_mask & mask_exclude]
                         
                 else:
@@ -870,18 +862,14 @@ class CameraOnlyExperiment:
                     valid_points = lidar_array[spatial_mask]
 
                 if len(valid_points) > 0:
-                    # ヒストグラム（密度）によるノイズ除去 (1m間隔の輪切りで5点以上を有効とする)
-                    counts, bin_edges = np.histogram(valid_points['x'], bins=np.arange(3.0, 61.0, 1.0))
-                    valid_bins = np.where(counts >= 5)[0]
+                    sorted_x = np.sort(valid_points['x'])
                     
-                    if len(valid_bins) > 0:
-                        closest_bin_idx = valid_bins[0]
-                        bin_start = bin_edges[closest_bin_idx]
-                        bin_end = bin_edges[closest_bin_idx + 1]
-                        
-                        # 最も近い有効距離帯にある点群の中央値を取得
-                        points_in_bin = valid_points[(valid_points['x'] >= bin_start) & (valid_points['x'] <= bin_end)]
-                        global_dist_lidar = float(np.median(points_in_bin['x']))
+                    # 強化案①：連続スライド窓方式 (5個の点が1.0m以内に密集しているか)
+                    for i in range(len(sorted_x) - 4):
+                        if sorted_x[i+4] - sorted_x[i] < 1.0:
+                            # 密集している塊を見つけたら、その5点の中央値を採用して即終了
+                            global_dist_lidar = float(np.median(sorted_x[i:i+5]))
+                            break
 
             if radar_data is not None:
                 radar_points = radar_data
