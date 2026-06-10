@@ -826,14 +826,22 @@ class CameraOnlyExperiment:
                 # タグを完全に無視し、自車の「真正面にある物体」を空間的に抽出する
                 mask_x = (lidar_array['x'] > 3.0) & (lidar_array['x'] < 60.0)  # 自車のボディ（3m以内）を完全に無視し、60m先まで
                 mask_y = np.abs(lidar_array['y']) < 2.0                        # 自分の車線幅（左右2m）
-                mask_z = lidar_array['z'] > -1.8                               # 地面（道路）の反射を除外
+                mask_z = lidar_array['z'] > -1.2                               # ピッチング時の地面（道路）の反射を完全に除外
                 
                 valid_points = lidar_array[mask_x & mask_y & mask_z]
                 if len(valid_points) > 0:
-                    sorted_x = np.sort(valid_points['x'])
-                    # ノイズ対策：絶対最小値ではなく「近い点トップ10の中央値」を取得（Top-N Median法）
-                    top_n = min(10, len(sorted_x))
-                    global_dist_lidar = float(np.median(sorted_x[:top_n]))
+                    # ヒストグラム（密度）によるノイズ除去 (1m間隔の輪切りで5点以上を有効とする)
+                    counts, bin_edges = np.histogram(valid_points['x'], bins=np.arange(3.0, 61.0, 1.0))
+                    valid_bins = np.where(counts >= 5)[0]
+                    
+                    if len(valid_bins) > 0:
+                        closest_bin_idx = valid_bins[0]
+                        bin_start = bin_edges[closest_bin_idx]
+                        bin_end = bin_edges[closest_bin_idx + 1]
+                        
+                        # 最も近い有効距離帯にある点群の中央値を取得
+                        points_in_bin = valid_points[(valid_points['x'] >= bin_start) & (valid_points['x'] <= bin_end)]
+                        global_dist_lidar = float(np.median(points_in_bin['x']))
 
             if radar_data is not None:
                 radar_points = radar_data
