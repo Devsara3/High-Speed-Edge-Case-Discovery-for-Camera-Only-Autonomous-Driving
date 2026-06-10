@@ -870,18 +870,10 @@ class CameraOnlyExperiment:
                     valid_points = lidar_array[spatial_mask]
 
                 if len(valid_points) > 0:
-                    # ヒストグラム（密度）によるノイズ除去 (1m間隔の輪切りで5点以上を有効とする)
-                    counts, bin_edges = np.histogram(valid_points['x'], bins=np.arange(3.0, 61.0, 1.0))
-                    valid_bins = np.where(counts >= 5)[0]
-                    
-                    if len(valid_bins) > 0:
-                        closest_bin_idx = valid_bins[0]
-                        bin_start = bin_edges[closest_bin_idx]
-                        bin_end = bin_edges[closest_bin_idx + 1]
-                        
-                        # 最も近い有効距離帯にある点群の中央値を取得
-                        points_in_bin = valid_points[(valid_points['x'] >= bin_start) & (valid_points['x'] <= bin_end)]
-                        global_dist_lidar = float(np.median(points_in_bin['x']))
+                    sorted_x = np.sort(valid_points['x'])
+                    # 最小値から近い順に最大10個の点を取り出し、その中央値を採用する (Top-10 Median法)
+                    top_n = min(10, len(sorted_x))
+                    global_dist_lidar = float(np.median(sorted_x[:top_n]))
 
             if radar_data is not None:
                 radar_points = radar_data
