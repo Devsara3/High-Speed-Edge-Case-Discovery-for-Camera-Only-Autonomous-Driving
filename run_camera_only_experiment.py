@@ -389,11 +389,16 @@ class CameraOnlyExperiment:
             
         elif name == 'B':
             lead_bp = self.blueprint_library.filter('model3')[0]
-            lead_loc = ego_transform.location + fwd * gap
+            gap_safe = 25.0
+            lead_loc = ego_transform.location + fwd * gap_safe
             lead_loc.z += 0.5
             lead_transform = carla.Transform(lead_loc, ego_transform.rotation)
             self.target_actor = self.world.spawn_actor(lead_bp, lead_transform)
             self.actors.append(self.target_actor)
+            
+            target_vel = fwd * (ego_speed_kph / 3.6)
+            self.ego_vehicle.set_target_velocity(target_vel)
+            self.target_actor.set_target_velocity(target_vel)
             
             self.lead_decel_started = False
             self.lead_decel_ticks = 40
